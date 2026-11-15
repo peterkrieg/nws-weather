@@ -78,23 +78,21 @@ main {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: 'hero' 'map' 'daily' 'hourly';
+  align-content: start;
 }
-main.is-loading .area-hero,
-main.is-loading .area-daily,
-main.is-loading .area-hourly { opacity: 0.45; transition: opacity 0.15s; }
-.area-hero { grid-area: hero; display: grid; gap: 12px; align-content: start; }
-.area-map { grid-area: map; }
-.area-daily { grid-area: daily; }
-.area-hourly { grid-area: hourly; }
+main.is-loading .sec-hero,
+main.is-loading .sec:not(.sec-map) { opacity: 0.45; transition: opacity 0.15s; }
+main.is-loading .sec-map { opacity: 1; }
+.sec { min-width: 0; }
+.sec-hero { display: grid; gap: 12px; align-content: start; }
 @media (min-width: 900px) {
   main {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas: 'hero map' 'daily map' 'hourly hourly';
-    grid-template-rows: auto 1fr auto;
     padding: 24px;
     gap: 20px;
   }
+  .sec-wide, .sec-map.map-rows-0 { grid-column: 1 / -1; }
+  .sec-map.map-rows-2 { grid-row: span 2; }
 }
 .card {
   background: var(--surface);
@@ -110,6 +108,7 @@ h2 { font-size: 18px; font-weight: 650; margin: 4px 2px 10px; }
 .empty p { color: var(--ink-2); max-width: 48ch; }
 .empty.center { display: flex; align-items: center; gap: 10px; color: var(--ink-2); }
 .hero { padding: 20px 22px; }
+.place-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .place { font-size: 22px; font-weight: 650; line-height: 1.2; }
 .place-sub { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
 .place-sub a { color: inherit; }
@@ -172,6 +171,53 @@ h2 { font-size: 18px; font-weight: 650; margin: 4px 2px 10px; }
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
 }
 .leaflet-container { font: inherit; font-size: 12px; cursor: crosshair; }
+
+/* ---------- favorites ---------- */
+.fav-bar { display: flex; gap: 8px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }
+.fav-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.fav-chip:hover { background: var(--wash); }
+.fav-chip.is-current { border-color: var(--s1); box-shadow: 0 0 0 1px var(--s1); }
+.fav-empty { color: var(--muted); font-size: 13px; padding: 2px 4px; }
+.fav-form { display: grid; gap: 14px; }
+.fav-emoji-input { font-size: 22px; width: 64px; text-align: center; }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 8px; }
+.emoji-grid button {
+  font-size: 20px;
+  line-height: 1;
+  padding: 6px 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+}
+.emoji-grid button:hover { background: var(--wash); }
+.emoji-grid button.is-on { border-color: var(--s1); background: var(--wash); }
+.fav-actions { display: flex; justify-content: space-between; }
+
+/* ---------- settings ---------- */
+.set-head { font-size: 13px; font-weight: 650; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; margin: 4px 0 4px; }
+.set-note { color: var(--muted); font-size: 12px; }
+.order-list { list-style: none; margin: 6px 0 18px; padding: 0; border: 1px solid var(--border); border-radius: 10px; }
+.order-list li { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 6px 12px; }
+.order-list li + li { border-top: 1px solid var(--border); }
+.order-list li.is-off .mantine-Switch-label { color: var(--muted); }
+.order-btns { display: flex; gap: 2px; }
+.set-foot { display: flex; align-items: center; justify-content: space-between; }
 
 /* ---------- air quality layer ---------- */
 .aq-monitor {

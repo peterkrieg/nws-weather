@@ -105,13 +105,6 @@ export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat
             <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} />
           </LayersControl.BaseLayer>
         ))}
-        <LayersControl.Overlay name="Hiking trails">
-          <TileLayer
-            url="https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png"
-            attribution='Trails &copy; <a href="https://hiking.waymarkedtrails.org">Waymarked Trails</a>'
-            maxZoom={18}
-          />
-        </LayersControl.Overlay>
         <LayersControl.Overlay name={AQ_LAYER} checked={aqOn}>
           <AirQualityLayer initialOn={aqOn} />
         </LayersControl.Overlay>

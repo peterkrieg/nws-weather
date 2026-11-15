@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActionIcon, Combobox, Loader, TextInput, useCombobox } from '@mantine/core';
 import { searchPlaces, type Loc, type Place } from './api';
+import type { Favorite } from './store';
 
 interface Props {
   onPickPlace: (p: Place) => void;
@@ -9,11 +10,13 @@ interface Props {
   bias: { lat: number; lon: number } | null;
   /** Changes when a location is chosen some other way (map click), which clears the box. */
   clearKey: string;
+  favorites: Favorite[];
+  onPickFavorite: (f: Favorite) => void;
 }
 
 const LATLON = /^\s*(-?\d{1,2}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/;
 
-export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, clearKey }: Props) {
+export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, clearKey, favorites, onPickFavorite }: Props) {
   const combobox = useCombobox({ onDropdownClose: () => combobox.resetSelectedOption() });
   const [value, setValue] = useState('');
   const [results, setResults] = useState<Place[]>([]);
@@ -67,6 +70,14 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
 
   const submit = (key: string) => {
     combobox.closeDropdown();
+    if (key.startsWith('fav:')) {
+      const f = favorites.find((x) => x.id === key.slice(4));
+      if (f) {
+        setValue('');
+        onPickFavorite(f);
+      }
+      return;
+    }
     if (key === 'coords' && coords) {
       onPickPoint(Number(coords[1]), Number(coords[2]), 'search');
       return;
@@ -88,7 +99,10 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
     );
   };
 
-  const hasDropdown = Boolean(coords) || list.length > 0 || Boolean(note);
+  const q = query.toLowerCase();
+  // Favorites lead the list: all of them on an empty box, matching names as you type.
+  const favMatches = coords ? [] : favorites.filter((f) => !q || f.label.toLowerCase().includes(q)).slice(0, 8);
+  const hasDropdown = Boolean(coords) || list.length > 0 || favMatches.length > 0 || Boolean(note);
 
   return (
     <div className="search">
@@ -147,6 +161,14 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
                 </div>
               </Combobox.Option>
             )}
+            {favMatches.length > 0 && <div className="s-head">Favorites</div>}
+            {favMatches.map((f) => (
+              <Combobox.Option value={`fav:${f.id}`} key={f.id}>
+                <div className="s-main">
+                  <span aria-hidden="true">{f.emoji}</span> {f.label}
+                </div>
+              </Combobox.Option>
+            ))}
             {showingRecents && list.length > 0 && <div className="s-head">Recent</div>}
             {list.map((p, i) => (
               <Combobox.Option value={String(i)} key={`${p.label}|${p.sub}|${p.lat}`}>
@@ -154,7 +176,7 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
                 {p.sub && <div className="s-sub">{p.sub}</div>}
               </Combobox.Option>
             ))}
-            {note && !coords && list.length === 0 && <Combobox.Empty>{note}</Combobox.Empty>}
+            {note && !coords && list.length === 0 && favMatches.length === 0 && <Combobox.Empty>{note}</Combobox.Empty>}
           </Combobox.Options>
         </Combobox.Dropdown>
       </Combobox>

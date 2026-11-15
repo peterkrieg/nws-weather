@@ -1,4 +1,5 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import type { ChartId, Item } from './store';
 import { SegmentedControl } from '@mantine/core';
 import {
   Area,
@@ -297,16 +298,17 @@ interface Props {
   lat: number;
   lon: number;
   source: 'nws' | 'openmeteo' | 'metno';
+  charts: Item<ChartId>[];
 }
 
-export default function Hourly({ hours, lat, lon, source }: Props) {
+export default function Hourly({ hours, lat, lon, source, charts }: Props) {
   const [range, setRange] = useState('48');
   const [tableOpen, setTableOpen] = useState(false);
   const hrs = Number(range);
   const frame = useFrame(hours, hrs, lat, lon);
   const { data } = frame;
 
-  const [tLo, tHi] = extent(data, ['temp', 'feels', 'dew']);
+  const [tLo, tHi] = extent(data, ['temp', 'feels']);
   const tempDomain: [number, number] = [Math.floor((tLo - 1) / 5) * 5, Math.ceil((tHi + 1) / 5) * 5];
 
   const windMax = extent(data, ['wind', 'gust'])[1];
@@ -321,6 +323,9 @@ export default function Hourly({ hours, lat, lon, source }: Props) {
   const uvStep = uvTop <= 6 ? 1 : uvTop <= 12 ? 2 : 4;
 
   const hasAmounts = data.some((h) => (h.qpf ?? 0) > 0 || (h.snow ?? 0) > 0);
+  // One "no rain or snow" note, after whichever of the two amount charts is shown last.
+  const amountIds = charts.filter((c) => c.on && (c.id === 'rain' || c.id === 'snow')).map((c) => c.id);
+  const showNoAmounts = (id: ChartId) => !hasAmounts && amountIds[amountIds.length - 1] === id;
 
   return (
     <>
@@ -339,12 +344,16 @@ export default function Hourly({ hours, lat, lon, source }: Props) {
       </div>
 
       <div className="charts">
-        <Panel
+        {charts.filter((c) => c.on).map((c) => {
+          switch (c.id) {
+            case 'temp':
+              return (
+                <Fragment key={c.id}>
+                  <Panel
           title="Temperature (°F)"
           legend={[
             { name: 'Temperature', color: C1 },
             ...(has('feels') ? [{ name: 'Feels like', color: C2 }] : []),
-            { name: 'Dew point', color: C3 },
           ]}
           frame={frame}
           domain={tempDomain}
@@ -354,15 +363,17 @@ export default function Hourly({ hours, lat, lon, source }: Props) {
           rows={(h) => [
             { name: 'temperature', value: deg(h.temp), color: C1 },
             ...(has('feels') ? [{ name: 'feels like', value: deg(h.feels), color: C2 }] : []),
-            { name: 'dew point', value: deg(h.dew), color: C3 },
           ]}
         >
-          <Line dataKey="dew" {...lineProps(C3)} />
           <Line dataKey="feels" {...lineProps(C2)} />
           <Line dataKey="temp" {...lineProps(C1)} />
         </Panel>
-
-        <Panel
+                </Fragment>
+              );
+            case 'humidity':
+              return (
+                <Fragment key={c.id}>
+                  <Panel
           title={has('pop') ? 'Precipitation chance, cloud cover, humidity (%)' : 'Cloud cover and humidity (%)'}
           legend={[
             ...(has('pop') ? [{ name: 'Chance of precip', color: C1 }] : []),
@@ -382,16 +393,30 @@ export default function Hourly({ hours, lat, lon, source }: Props) {
           <Line dataKey="sky" {...lineProps(C2)} />
           <Area dataKey="pop" {...lineProps(C1)} fill={C1} fillOpacity={0.12} />
         </Panel>
-
-        <AmountPanel
+                </Fragment>
+              );
+            case 'rain':
+              return (
+                <Fragment key={c.id}>
+                  <AmountPanel
           frame={frame}
           kind="qpf"
           title={source === 'nws' ? 'Rain (liquid precipitation, inches)' : 'Precipitation (rain or melted snow, inches)'}
         />
-        <AmountPanel frame={frame} kind="snow" title="Snowfall (inches)" />
-        {!hasAmounts && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
-
-        <Panel
+                  {showNoAmounts('rain') && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
+                </Fragment>
+              );
+            case 'snow':
+              return (
+                <Fragment key={c.id}>
+                  <AmountPanel frame={frame} kind="snow" title="Snowfall (inches)" />
+                  {showNoAmounts('snow') && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
+                </Fragment>
+              );
+            case 'wind':
+              return (
+                <Fragment key={c.id}>
+                  <Panel
           title="Wind (mph)"
           legend={has('gust') ? [{ name: 'Sustained', color: C1 }, { name: 'Gusts', color: C2 }] : undefined}
           frame={frame}
@@ -426,9 +451,12 @@ export default function Hourly({ hours, lat, lon, source }: Props) {
             }
           />
         </Panel>
-
-        {has('uv') && (
-          <Panel
+                </Fragment>
+              );
+            case 'uv':
+              return has('uv') ? (
+                <Fragment key={c.id}>
+                  <Panel
             title="UV index"
             legend={[
               { name: 'Forecast', color: C1 },
@@ -445,13 +473,20 @@ export default function Hourly({ hours, lat, lon, source }: Props) {
             <Line dataKey="uvClear" {...lineProps(C2)} />
             <Area dataKey="uv" {...lineProps(C1)} fill={C1} fillOpacity={0.12} />
           </Panel>
-        )}
-      </div>
-
-      <details className="card table-card" onToggle={(e) => setTableOpen(e.currentTarget.open)}>
+                </Fragment>
+              ) : null;
+            case 'table':
+              return (
+                <Fragment key={c.id}>
+                  <details className="card table-card" onToggle={(e) => setTableOpen(e.currentTarget.open)}>
         <summary>Hourly table</summary>
         {tableOpen && <HourlyTable data={data} />}
       </details>
+                </Fragment>
+              );
+          }
+        })}
+      </div>
     </>
   );
 }

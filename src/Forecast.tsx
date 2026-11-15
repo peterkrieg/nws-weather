@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Accordion } from '@mantine/core';
 import type { Alert, Period, Weather } from './api';
 import { clock, sunTimes } from './sun';
@@ -20,7 +21,17 @@ export function Alerts({ alerts }: { alerts: Alert[] }) {
 
 const ft = (v: number) => `${Math.round(v).toLocaleString('en-US')} ft`;
 
-export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; pointElevFt: number | null | undefined }) {
+export function Hero({
+  wx,
+  title,
+  pointElevFt,
+  titleAction,
+}: {
+  wx: Weather;
+  title: string;
+  pointElevFt: number | null | undefined;
+  titleAction?: ReactNode;
+}) {
   // undefined = still loading, null = lookup failed
   const now = wx.hours[0];
   const first = wx.periods[0];
@@ -60,7 +71,10 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
 
   return (
     <div className="card hero">
-      <h1 className="place">{title}</h1>
+      <div className="place-row">
+        <h1 className="place">{title}</h1>
+        {titleAction}
+      </div>
       <div className="place-sub">
         {[
           showPlace ? wx.place : null,
