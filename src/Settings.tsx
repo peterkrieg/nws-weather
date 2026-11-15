@@ -1,18 +1,53 @@
-import { useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Button, Modal, Switch } from '@mantine/core';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { CSS } from '@dnd-kit/utilities';
 import { BASES } from './MapView';
 import { CHARTS, SECTIONS, defaultPrefs, type Item, type Prefs } from './store';
 
-function move<T>(list: T[], from: number, to: number): T[] {
-  const next = [...list];
-  const [it] = next.splice(from, 1);
-  next.splice(to, 0, it);
-  return next;
+function Row<Id extends string>({ item, label, onToggle }: { item: Item<Id>; label: string; onToggle: (on: boolean) => void }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
+  const style: CSSProperties = { transform: CSS.Translate.toString(transform), transition };
+  return (
+    <li ref={setNodeRef} style={style} className={[item.on ? '' : 'is-off', isDragging ? 'is-dragging' : ''].join(' ').trim() || undefined}>
+      <button
+        type="button"
+        className="drag-handle"
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        aria-label={`Reorder ${label}`}
+        title="Drag to reorder"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          {[6, 12, 18].map((y) => [9, 15].map((x) => <circle key={`${x}${y}`} cx={x} cy={y} r="1.6" />))}
+        </svg>
+      </button>
+      <Switch
+        size="sm"
+        className="order-switch"
+        checked={item.on}
+        onChange={(e) => onToggle(e.currentTarget.checked)}
+        label={label}
+        labelPosition="left"
+      />
+    </li>
+  );
 }
 
 /**
- * Switches you reorder by dragging the grip (mouse or finger). The row moves as you drag past
- * its neighbours. Keyboard: focus the grip and use the arrow keys.
+ * Switches you reorder by dragging the grip (mouse or finger): the row lifts, its neighbours slide
+ * out of the way, and it settles into place on drop. Keyboard: focus the grip, Space, arrows, Space.
  */
 function OrderList<Id extends string>({
   items,
@@ -23,83 +58,46 @@ function OrderList<Id extends string>({
   labels: Record<Id, string>;
   onChange: (items: Item<Id>[]) => void;
 }) {
-  const [dragging, setDragging] = useState<Id | null>(null);
-  const rows = useRef(new Map<Id, HTMLLIElement>());
-  // Window listeners outlive this render, so they read the latest list through a ref.
-  const latest = useRef({ items, onChange });
-  latest.current = { items, onChange };
-
-  const startDrag = (id: Id) => (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    setDragging(id);
-    const onMove = (ev: PointerEvent) => {
-      const { items, onChange } = latest.current;
-      const from = items.findIndex((x) => x.id === id);
-      // Target: the row whose vertical middle the pointer has passed.
-      let to = from;
-      items.forEach((x, i) => {
-        const r = rows.current.get(x.id)?.getBoundingClientRect();
-        if (!r) return;
-        if (i < from && ev.clientY < r.top + r.height / 2) to = Math.min(to, i);
-        if (i > from && ev.clientY > r.top + r.height / 2) to = Math.max(to, i);
-      });
-      if (to !== from) onChange(move(items, from, to));
-    };
-    const onUp = () => {
-      setDragging(null);
-      removeEventListener('pointermove', onMove);
-      removeEventListener('pointerup', onUp);
-      removeEventListener('pointercancel', onUp);
-    };
-    addEventListener('pointermove', onMove);
-    addEventListener('pointerup', onUp);
-    addEventListener('pointercancel', onUp);
+  const sensors = useSensors(
+    // A few px of movement before a drag starts, so a tap on the grip isn't a drag.
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const name = (id: unknown) => labels[id as Id] ?? String(id);
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return;
+    const from = items.findIndex((i) => i.id === active.id);
+    const to = items.findIndex((i) => i.id === over.id);
+    onChange(arrayMove(items, from, to));
   };
-
-  const onKey = (i: number) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
-    const to = e.key === 'ArrowUp' ? i - 1 : e.key === 'ArrowDown' ? i + 1 : null;
-    if (to == null || to < 0 || to >= items.length) return;
-    e.preventDefault();
-    const btn = e.currentTarget;
-    onChange(move(items, i, to));
-    requestAnimationFrame(() => btn.focus());
-  };
-
   return (
-    <ul className={dragging ? 'order-list is-sorting' : 'order-list'}>
-      {items.map((it, i) => (
-        <li
-          key={it.id}
-          ref={(el) => {
-            if (el) rows.current.set(it.id, el);
-            else rows.current.delete(it.id);
-          }}
-          className={[it.on ? '' : 'is-off', dragging === it.id ? 'is-dragging' : ''].join(' ').trim() || undefined}
-        >
-          <button
-            type="button"
-            className="drag-handle"
-            onPointerDown={startDrag(it.id)}
-            onKeyDown={onKey(i)}
-            aria-label={`Reorder ${labels[it.id]}. Use the up and down arrow keys.`}
-            title="Drag to reorder"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              {[6, 12, 18].map((y) => [9, 15].map((x) => <circle key={`${x}${y}`} cx={x} cy={y} r="1.6" />))}
-            </svg>
-          </button>
-          <Switch
-            size="sm"
-            className="order-switch"
-            checked={it.on}
-            onChange={(e) => onChange(items.map((x) => (x.id === it.id ? { ...x, on: e.currentTarget.checked } : x)))}
-            label={labels[it.id]}
-            labelPosition="left"
-          />
-        </li>
-      ))}
-    </ul>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+      onDragEnd={onDragEnd}
+      accessibility={{
+        announcements: {
+          onDragStart: ({ active }) => `Picked up ${name(active.id)}.`,
+          onDragOver: ({ active, over }) => (over ? `${name(active.id)} is now at ${name(over.id)}.` : undefined),
+          onDragEnd: ({ active, over }) => (over ? `Dropped ${name(active.id)} at ${name(over.id)}.` : `Dropped ${name(active.id)}.`),
+          onDragCancel: ({ active }) => `Cancelled. ${name(active.id)} is back where it was.`,
+        },
+      }}
+    >
+      <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+        <ul className="order-list">
+          {items.map((it) => (
+            <Row
+              key={it.id}
+              item={it}
+              label={labels[it.id]}
+              onToggle={(on) => onChange(items.map((x) => (x.id === it.id ? { ...x, on } : x)))}
+            />
+          ))}
+        </ul>
+      </SortableContext>
+    </DndContext>
   );
 }
 
