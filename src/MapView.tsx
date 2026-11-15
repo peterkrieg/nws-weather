@@ -4,6 +4,7 @@ import { LayersControl, MapContainer, Marker, TileLayer, useMap, useMapEvents } 
 import { createElementObject, createLayerComponent } from '@react-leaflet/core';
 import type { Loc } from './api';
 import { AQ_LAYER, AirQualityLayer } from './AirQuality';
+import MtbLegend from './MtbLegend';
 
 const AQ_KEY = 'wx:aq';
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
@@ -299,6 +300,7 @@ export default function MapView({
           <AirQualityLayer initialOn={aqOn} />
         </LayersControl.Overlay>
       </LayersControl>
+      {base === 'Outdoors' && <MtbLegend />}
       {loc && <Marker position={[loc.lat, loc.lon]} icon={pin} interactive={false} />}
       {tapped && <Marker position={[tapped.lat, tapped.lon]} icon={pending} interactive={false} />}
       {tapped && (
