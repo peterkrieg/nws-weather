@@ -592,3 +592,4 @@ footer a { color: inherit; }
 .sun-times b { font-weight: 600; font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 @media (max-width: 520px) { .sun-times { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .d-sun { font-size: 13px; }
+

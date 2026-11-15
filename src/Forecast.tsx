@@ -20,6 +20,15 @@ export function Alerts({ alerts }: { alerts: Alert[] }) {
   );
 }
 
+function selectOnTripleClick(e: React.MouseEvent<HTMLElement>) {
+  if (e.detail < 3) return;
+  const range = document.createRange();
+  range.selectNodeContents(e.currentTarget);
+  const sel = getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
 const ft = (v: number) => `${Math.round(v).toLocaleString('en-US')} ft`;
 
 export function Hero({
@@ -84,7 +93,11 @@ export function Hero({
       <div className="place-sub">
         {showPlace && <span>{wx.place} · </span>}
         <span className="wide-only">
-          {wx.lat.toFixed(4)}, {wx.lon.toFixed(4)} ·{' '}
+          {/* Triple-click selects just the coordinates (browsers would take the whole line). */}
+          <span className="coords" onClick={selectOnTripleClick}>
+            {wx.lat.toFixed(4)}, {wx.lon.toFixed(4)}
+          </span>
+          {' · '}
         </span>
         <span className="elev">
           Elevation{' '}
