@@ -25,6 +25,8 @@ interface CellData {
   monitors: Monitor[];
   sensors: Sensor[];
   errors: string[];
+  /** Sources whose API key isn't set up on the server. */
+  unconfigured?: string[];
 }
 
 export const AQ_LAYER = 'Air quality';
@@ -74,7 +76,7 @@ function cellsInView(map: L.Map): string[] {
   return cells;
 }
 
-function Legend({ note }: { note: string | null }) {
+function Legend({ note, sensors }: { note: string | null; sensors: boolean }) {
   return (
     <div className="aq-legend leaflet-bottom leaflet-left">
       <div className="leaflet-control">
@@ -95,9 +97,11 @@ function Legend({ note }: { note: string | null }) {
               <span>
                 <i className="aq-key-monitor" /> Official monitor
               </span>
-              <span>
-                <i className="aq-key-sensor" /> PurpleAir
-              </span>
+              {sensors && (
+                <span>
+                  <i className="aq-key-sensor" /> PurpleAir
+                </span>
+              )}
             </div>
           </>
         )}
@@ -119,7 +123,8 @@ export function AirQualityLayer({ initialOn }: { initialOn: boolean }) {
     const now = Date.now();
     for (const cell of cellsInView(map).slice(0, MAX_CELLS)) {
       const have = cells[cell];
-      if ((have && now - have.at < REFRESH_MS) || inflight.current.has(cell)) continue;
+      const maxAge = have?.errors.length ? 60e3 : REFRESH_MS; // retry failures sooner
+      if ((have && now - have.at < maxAge) || inflight.current.has(cell)) continue;
       inflight.current.add(cell);
       fetch(`/api/aq?cell=${cell}`)
         .then((r) => r.json())
@@ -153,9 +158,13 @@ export function AirQualityLayer({ initialOn }: { initialOn: boolean }) {
     ? null
     : zoom < MIN_ZOOM
       ? 'Zoom in to see air quality'
-      : errors.length && !monitors.length && !sensors.length
-        ? `Air quality unavailable: ${errors.join('; ')}`
-        : null;
+      : monitors.length || sensors.length
+        ? null
+        : errors.length
+          ? `Air quality unavailable: ${errors.join('; ')}`
+          : data.length && data.every((d) => d.unconfigured?.length === 2)
+            ? 'Air quality needs an API key on the server'
+            : null;
 
   return (
     <>
@@ -207,7 +216,7 @@ export function AirQualityLayer({ initialOn }: { initialOn: boolean }) {
             );
           })}
       </LayerGroup>
-      {on && <Legend note={note} />}
+      {on && <Legend note={note} sensors={sensors.length > 0} />}
     </>
   );
 }

@@ -189,10 +189,10 @@ async function purpleAirReadings(env: Env, ids: number[]): Promise<Sensor[]> {
 
 // ---- Routing --------------------------------------------------------------------------------
 
-const json = (body: unknown, status = 200) =>
+const json = (body: unknown, status = 200, maxAge = 0) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': maxAge ? `public, max-age=${maxAge}` : 'no-store' },
   });
 
 async function airQuality(url: URL, env: Env) {
@@ -206,18 +206,20 @@ async function airQuality(url: URL, env: Env) {
   const [monitors, sensors] = await Promise.all([
     env.AIRNOW_KEY
       ? cached(`airnow/${cell}`, READ_TTL, () => airNow(env, s, w)).catch((e: Error) => e.message)
-      : 'AirNow key not configured',
+      : null,
     env.PURPLEAIR_KEY
       ? cached(`pa-sample/${cell}`, SAMPLE_TTL, () => purpleAirSample(env, s, w))
           .then((ids) => cached(`pa/${cell}`, READ_TTL, () => purpleAirReadings(env, ids)))
           .catch((e: Error) => e.message)
-      : 'PurpleAir key not configured',
+      : null,
   ]);
-  return json({
-    monitors: Array.isArray(monitors) ? monitors : [],
-    sensors: Array.isArray(sensors) ? sensors : [],
-    errors: [monitors, sensors].filter((x): x is string => typeof x === 'string'),
-  });
+  const errors = [monitors, sensors].filter((x): x is string => typeof x === 'string');
+  const unconfigured = [!env.AIRNOW_KEY && 'AirNow', !env.PURPLEAIR_KEY && 'PurpleAir'].filter(Boolean);
+  return json(
+    { monitors: Array.isArray(monitors) ? monitors : [], sensors: Array.isArray(sensors) ? sensors : [], errors, unconfigured },
+    200,
+    errors.length ? 0 : 300, // never let a browser hold on to a failure
+  );
 }
 
 export default {
