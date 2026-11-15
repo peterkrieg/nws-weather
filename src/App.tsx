@@ -10,6 +10,7 @@ import { FavoriteEditor, FavoritesBar, FavoriteStar } from './Favorites';
 import { readJson, samePlace, useFavorites, usePrefs, writeJson, type Favorite, type SectionId } from './store';
 
 const LAST_KEY = 'wx:last';
+const TOUCH = window.matchMedia('(pointer: coarse)').matches;
 const RECENTS_KEY = 'wx:recents';
 
 /** URL hash is "#lat,lon" or "#lat,lon,Label" so a location can be bookmarked or shared. */
@@ -114,7 +115,7 @@ export default function App() {
 
   const anyChart = prefs.charts.some((c) => c.on);
   const available: Record<SectionId, boolean> = {
-    favorites: true,
+    favorites: favorites.length > 0, // the ☆ by the place name is how the first one gets added
     summary: true,
     map: true,
     daily: Boolean(wx && wx.periods.length > 0),
@@ -171,7 +172,7 @@ export default function App() {
     map: (
       <section key="map" className={cls('map', 'card map-card')}>
         <MapView loc={loc} onPick={(lat, lon) => pickPoint(lat, lon, 'map')} />
-        <p className="map-hint">Click the map for that spot's forecast</p>
+        <p className="map-hint">{TOUCH ? 'Tap the map to check a spot' : "Click the map for that spot's forecast"}</p>
       </section>
     ),
     daily:

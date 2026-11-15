@@ -171,6 +171,57 @@ h2 { font-size: 18px; font-weight: 650; margin: 4px 2px 10px; }
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
 }
 .leaflet-container { font: inherit; font-size: 12px; cursor: crosshair; }
+.pin-pending { background: #fff; border-color: #2a78d6; }
+.map-two-finger {
+  position: absolute;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.map-confirm {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  gap: 6px;
+}
+.map-confirm button {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+.map-confirm-go { background: #2a78d6; color: #fff; padding: 0 18px; white-space: nowrap; }
+.map-confirm-x { background: var(--surface); color: var(--ink); width: 44px; }
+.aq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-weight: 650;
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  min-height: 28px;
+  cursor: pointer;
+}
+.aq-chip-scale { display: inline-flex; gap: 1px; }
+.aq-chip-scale i { width: 6px; height: 10px; border-radius: 1px; }
+.aq-close { float: right; margin: -4px -4px 0 8px; font-size: 12px; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 4px; }
 
 /* ---------- favorites ---------- */
 .fav-bar { display: flex; gap: 8px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }

@@ -113,7 +113,7 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
             radius="md"
             type="search"
             aria-label="Search for a place"
-            placeholder="Search an address, place, or lat, lon"
+            placeholder="Search places or lat, lon"
             autoComplete="off"
             spellCheck={false}
             value={value}

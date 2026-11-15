@@ -77,10 +77,21 @@ function cellsInView(map: L.Map): string[] {
 }
 
 function Legend({ note, sensors }: { note: string | null; sensors: boolean }) {
+  // Small maps (phones) start with the legend folded into a chip so it doesn't cover the dots.
+  const [open, setOpen] = useState(() => !window.matchMedia('(max-width: 600px)').matches);
   return (
     <div className="aq-legend leaflet-bottom leaflet-left">
-      <div className="leaflet-control">
-        {note ? (
+      <div className="leaflet-control" ref={(el) => { if (el) L.DomEvent.disableClickPropagation(el); }}>
+        {!note && !open ? (
+          <button type="button" className="aq-chip" onClick={() => setOpen(true)} aria-label="Show air quality legend">
+            <span className="aq-chip-scale" aria-hidden="true">
+              {LEVELS.slice(0, 4).map((l) => (
+                <i key={l.name} style={{ background: l.color }} />
+              ))}
+            </span>
+            AQI
+          </button>
+        ) : note ? (
           <div className="aq-note">{note}</div>
         ) : (
           <>
@@ -93,6 +104,9 @@ function Legend({ note, sensors }: { note: string | null; sensors: boolean }) {
               <span>Good</span>
               <span>Hazardous</span>
             </div>
+            <button type="button" className="aq-close" onClick={() => setOpen(false)} aria-label="Hide legend">
+              ✕
+            </button>
             <div className="aq-keys">
               <span>
                 <i className="aq-key-monitor" /> Official monitor
