@@ -147,6 +147,21 @@ export default function Settings({
           </label>
         ))}
       </div>
+      {prefs.basemap === 'Outdoors' && (
+        <ul className="order-list">
+          <li className={prefs.mtbRatings ? '' : 'is-off'}>
+            <Switch
+              size="sm"
+              className="order-switch"
+              checked={prefs.mtbRatings}
+              onChange={(e) => setPrefs({ ...prefs, mtbRatings: e.currentTarget.checked })}
+              label="Colour bike trails by difficulty"
+              description="Off: only downhill-only trails are highlighted."
+              labelPosition="left"
+            />
+          </li>
+        </ul>
+      )}
       <h3 className="set-head">Hourly charts</h3>
       <OrderList items={prefs.charts} labels={CHARTS} onChange={(charts) => setPrefs({ ...prefs, charts })} />
       <div className="set-foot">

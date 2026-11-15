@@ -5,7 +5,7 @@
 import L from 'leaflet';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '@maplibre/maplibre-gl-leaflet';
-import { setWorkerUrl, type StyleSpecification, type LayerSpecification } from 'maplibre-gl';
+import { setWorkerUrl, type FilterSpecification, type LayerSpecification, type Map as MlMap, type StyleSpecification } from 'maplibre-gl';
 // MapLibre finds its worker next to its own file, which breaks once bundled; let Vite bundle it.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
@@ -30,6 +30,8 @@ export const MTB = [
   { key: 'pro', label: 'Pro line', color: '#e8590c', scale: ['5', '6'] },
 ] as const;
 export const MTB_UNRATED = '#9c36b5';
+/** Downhill-only trails when difficulty colours are off. */
+export const MTB_DOWNHILL = '#d6336c';
 
 /** First character of mtb_scale ("2+" → "2"). */
 const scale = ['slice', ['to-string', ['get', 'mtb_scale']], 0, 1];
@@ -50,6 +52,8 @@ const isMtb = [
     ['all', ['==', ['get', 'bicycle'], 'designated'], ['!=', ['get', 'subclass'], 'cycleway'], ['!=', ['get', 'surface'], 'paved']],
   ],
 ];
+// One-way bike trails: in practice the downhill-only lines.
+const isDownhill = ['all', isMtb, ['!=', ['coalesce', ['get', 'oneway'], 0], 0]];
 const width = (k: number) => ['interpolate', ['linear'], ['zoom'], 12, 1.2 * k, 14, 2.2 * k, 16, 3.2 * k, 20, 7 * k];
 
 function mtbLayers(): LayerSpecification[] {
@@ -73,7 +77,7 @@ function mtbLayers(): LayerSpecification[] {
       id: 'mtb-arrows',
       type: 'symbol',
       minzoom: 13, // MapLibre zoom runs one below Leaflet's: this is Leaflet zoom 14
-      filter: ['all', isMtb, ['!=', ['coalesce', ['get', 'oneway'], 0], 0]],
+      filter: isDownhill,
       layout: {
         'symbol-placement': 'line',
         'symbol-spacing': ['interpolate', ['linear'], ['zoom'], 13, 60, 17, 120],
@@ -176,6 +180,25 @@ const loadStyle = () =>
       stylePromise = null; // try again next time
       throw e;
     }));
+
+/**
+ * Difficulty colours on: every bike trail coloured by rating. Off: only downhill-only trails are
+ * highlighted (one colour, with arrows) and other bike trails look like any other trail.
+ */
+export function setMtbRatings(map: MlMap | null | undefined, on: boolean) {
+  if (!map) return; // layer already taken off the map
+  const apply = () => {
+    const filter = (on ? isMtb : isDownhill) as FilterSpecification;
+    const color = (on ? mtbColor : MTB_DOWNHILL) as never;
+    map.setFilter('mtb-halo', filter);
+    map.setFilter('mtb-line', filter);
+    map.setPaintProperty('mtb-line', 'line-color', color);
+    map.setPaintProperty('mtb-arrows', 'icon-color', color);
+    map.setLayoutProperty('mtb-double', 'visibility', on ? 'visible' : 'none');
+  };
+  if (map.isStyleLoaded()) apply();
+  else map.once('load', apply);
+}
 
 export async function createOutdoorsLayer(): Promise<L.Layer> {
   const style = await loadStyle();

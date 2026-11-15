@@ -33,13 +33,6 @@ export const BASES: {
     vector: true,
   },
   {
-    name: 'Street',
-    note: 'OpenStreetMap standard. Detailed, bold road colors.',
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: OSM_ATTR,
-    maxNativeZoom: 19,
-  },
-  {
     name: 'Trails',
     note: 'CyclOSM. Muted roads, trails stand out.',
     url: 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
@@ -76,42 +69,69 @@ export const BASES: {
   },
 ];
 
-const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name : 'Street');
+const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name : 'Outdoors');
 
 /**
  * The Outdoors style is drawn by MapLibre (about 250 KB), so it's fetched only when that style is
  * on screen. This stand-in layer is what the layer switch adds and removes.
  */
+type Lazy = L.Layer & { gl?: L.MaplibreGL; on_?: boolean; ratings: boolean; setRatings: (on: boolean) => void };
 const LazyVector = L.Layer.extend({
-  initialize(this: L.Layer & { opts: { attribution: string } }, attribution: string) {
-    this.opts = { attribution };
+  initialize(this: Lazy, attribution: string, ratings: boolean) {
     (this as unknown as { options: L.LayerOptions }).options = { attribution };
+    this.ratings = ratings;
   },
-  onAdd(this: L.Layer & { gl?: L.Layer; on_?: boolean }, map: L.Map) {
+  onAdd(this: Lazy, map: L.Map) {
     this.on_ = true;
     import('./vectorMap')
-      .then((m) => m.createOutdoorsLayer())
-      .then((gl) => {
+      .then(async (m) => {
+        const gl = (await m.createOutdoorsLayer()) as L.MaplibreGL;
         if (!this.on_) return;
         this.gl = gl;
         gl.addTo(map);
+        m.setMtbRatings(gl.getMaplibreMap(), this.ratings);
       })
       .catch(() => {
         /* offline or blocked: the map stays blank until another style is chosen */
       });
     return this;
   },
-  onRemove(this: L.Layer & { gl?: L.Layer; on_?: boolean }) {
+  onRemove(this: Lazy) {
     this.on_ = false;
     this.gl?.remove();
     this.gl = undefined;
     return this;
   },
-}) as unknown as new (attribution: string) => L.Layer;
+  setRatings(this: Lazy, on: boolean) {
+    this.ratings = on;
+    const gl = this.gl;
+    if (gl) void import('./vectorMap').then((m) => this.gl === gl && m.setMtbRatings(gl.getMaplibreMap(), on));
+  },
+}) as unknown as new (attribution: string, ratings: boolean) => Lazy;
 
-const VectorLayer = createLayerComponent<L.Layer, { attribution: string }>(
-  (props, ctx) => createElementObject(new LazyVector(props.attribution), ctx),
+const VectorLayer = createLayerComponent<Lazy, { attribution: string; ratings: boolean }>(
+  (props, ctx) => createElementObject(new LazyVector(props.attribution, props.ratings), ctx),
+  (layer, props, prev) => {
+    if (props.ratings !== prev.ratings) layer.setRatings(props.ratings);
+  },
 );
+
+/** Keeps the layer-menu checkbox in step when the setting changes in Layout settings. */
+function MtbSync({ toggle, on }: { toggle: React.RefObject<L.LayerGroup | null>; on: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    const layer = toggle.current;
+    if (!layer) return;
+    // The control updates its checkbox on layer add/remove (and only reports clicks back to us).
+    if (on && !map.hasLayer(layer)) map.addLayer(layer);
+    if (!on && map.hasLayer(layer)) map.removeLayer(layer);
+  });
+  return null;
+}
+
+/** Empty stand-in so "Bike trail difficulty" can be a checkbox in the map's layer menu. */
+export const MTB_LAYER = 'Bike trail difficulty';
+const MtbToggle = createLayerComponent<L.LayerGroup, object>((_p, ctx) => createElementObject(L.layerGroup(), ctx));
 
 function save(key: string, value: string) {
   try {
@@ -134,11 +154,13 @@ function Controller({
   onPick,
   onTap,
   onBase,
+  onMtb,
 }: {
   loc: Loc | null;
   onPick: (lat: number, lon: number) => void;
   onTap: (lat: number, lon: number) => void;
   onBase: (name: string) => void;
+  onMtb: (on: boolean) => void;
 }) {
   const map = useMap();
   useMapEvents({
@@ -148,8 +170,14 @@ function Controller({
       if (TOUCH) onTap(lat, lng);
       else onPick(lat, lng);
     },
-    overlayadd: (e) => e.name === AQ_LAYER && save(AQ_KEY, '1'),
-    overlayremove: (e) => e.name === AQ_LAYER && save(AQ_KEY, '0'),
+    overlayadd: (e) => {
+      if (e.name === AQ_LAYER) save(AQ_KEY, '1');
+      if (e.name === MTB_LAYER) onMtb(true);
+    },
+    overlayremove: (e) => {
+      if (e.name === AQ_LAYER) save(AQ_KEY, '0');
+      if (e.name === MTB_LAYER) onMtb(false);
+    },
     baselayerchange: (e) => onBase(e.name),
   });
 
@@ -251,11 +279,15 @@ export default function MapView({
   onPick,
   basemap,
   onBasemap,
+  mtbRatings,
+  onMtbRatings,
 }: {
   loc: Loc | null;
   onPick: (lat: number, lon: number) => void;
   basemap: string;
   onBasemap: (name: string) => void;
+  mtbRatings: boolean;
+  onMtbRatings: (on: boolean) => void;
 }) {
   const base = validBase(basemap);
   // The layer switch only reads `checked` when it mounts. A change made in the map's own switch is
@@ -272,6 +304,7 @@ export default function MapView({
     shownBase.current = name;
     onBasemap(name);
   };
+  const mtbToggle = useRef<L.LayerGroup>(null);
   const aqOn = aqSaved();
   const [tapped, setTapped] = useState<{ lat: number; lon: number } | null>(null);
   const [full, setFull] = useState(false);
@@ -290,7 +323,7 @@ export default function MapView({
           <LayersControl.BaseLayer key={b.name} name={b.name} checked={b.name === base}>
             {/* CORS mode so the service worker can keep viewed tiles for offline use. */}
             {b.vector ? (
-              <VectorLayer attribution={b.attribution} />
+              <VectorLayer attribution={b.attribution} ratings={mtbRatings} />
             ) : (
               <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} crossOrigin="anonymous" />
             )}
@@ -299,8 +332,13 @@ export default function MapView({
         <LayersControl.Overlay name={AQ_LAYER} checked={aqOn}>
           <AirQualityLayer initialOn={aqOn} />
         </LayersControl.Overlay>
+        {base === 'Outdoors' && (
+          <LayersControl.Overlay name={MTB_LAYER} checked={mtbRatings}>
+            <MtbToggle ref={mtbToggle} />
+          </LayersControl.Overlay>
+        )}
       </LayersControl>
-      {base === 'Outdoors' && <MtbLegend />}
+      {base === 'Outdoors' && <MtbLegend ratings={mtbRatings} />}
       {loc && <Marker position={[loc.lat, loc.lon]} icon={pin} interactive={false} />}
       {tapped && <Marker position={[tapped.lat, tapped.lon]} icon={pending} interactive={false} />}
       {tapped && (
@@ -322,7 +360,8 @@ export default function MapView({
       )}
       <TwoFingerHint disabled={full} />
       <FullScreen full={full} setFull={setFull} />
-      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} />
+      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} />
+      <MtbSync toggle={mtbToggle} on={mtbRatings} />
     </MapContainer>
   );
 }
