@@ -66,7 +66,7 @@ a { color: var(--s1); }
 .s-sub { color: var(--ink-2); font-size: 13px; }
 .s-head { color: var(--muted); font-size: 12px; padding: 4px 10px 2px; }
 @media (max-width: 520px) {
-  .brand span { display: none; }
+  .brand { display: none; }
   .top-inner { gap: 10px; }
 }
 
