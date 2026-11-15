@@ -28,7 +28,23 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
   const icon = now?.icon ?? first?.icon;
   const temp = now?.temp ?? first?.temperature ?? null;
   const showPlace = title !== wx.place;
-  const nwsUrl = `https://forecast.weather.gov/MapClick.php?lat=${wx.lat.toFixed(4)}&lon=${wx.lon.toFixed(4)}`;
+  const sourceUrl =
+    wx.source === 'nws'
+      ? `https://forecast.weather.gov/MapClick.php?lat=${wx.lat.toFixed(4)}&lon=${wx.lon.toFixed(4)}`
+      : `https://www.yr.no/en/forecast/daily-table/${wx.lat.toFixed(3)},${wx.lon.toFixed(3)}`;
+
+  // Show the first four of these that the forecast source actually provides for this spot.
+  const tiles: { label: string; value: string; small?: string }[] = now
+    ? [
+        { label: 'Wind', value: mph(now.wind), small: now.dir != null ? compass(now.dir) : undefined, has: now.wind },
+        { label: 'Gusts', value: mph(now.gust), has: now.gust },
+        { label: 'Chance of precip', value: pct(now.pop), has: now.pop },
+        { label: 'Snow level', value: feet(now.snowLvl), has: now.snowLvl },
+        { label: 'Humidity', value: pct(now.rh), has: now.rh },
+        { label: 'Cloud cover', value: pct(now.sky), has: now.sky },
+        { label: 'Dew point', value: deg(now.dew), has: now.dew },
+      ].filter((t) => t.has != null)
+    : [];
 
   // After dark, tomorrow's times are the useful ones.
   const nowMs = Date.now();
@@ -51,8 +67,8 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
           .filter(Boolean)
           .join(' · ')}{' '}
         ·{' '}
-        <a href={nwsUrl} target="_blank" rel="noopener">
-          weather.gov
+        <a href={sourceUrl} target="_blank" rel="noopener">
+          {wx.source === 'nws' ? 'weather.gov' : 'MET Norway forecast'}
         </a>{' '}
         ·{' '}
         <span className="elev">
@@ -80,25 +96,15 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
 
       {now && (
         <div className="tiles">
-          <div className="tile">
-            <div className="tile-label">Wind</div>
-            <div className="tile-value">
-              {now.dir != null && <small>{compass(now.dir)} </small>}
-              {mph(now.wind)}
+          {tiles.slice(0, 4).map((t) => (
+            <div className="tile" key={t.label}>
+              <div className="tile-label">{t.label}</div>
+              <div className="tile-value">
+                {t.small && <small>{t.small} </small>}
+                {t.value}
+              </div>
             </div>
-          </div>
-          <div className="tile">
-            <div className="tile-label">Gusts</div>
-            <div className="tile-value">{mph(now.gust)}</div>
-          </div>
-          <div className="tile">
-            <div className="tile-label">Chance of precip</div>
-            <div className="tile-value">{pct(now.pop)}</div>
-          </div>
-          <div className="tile">
-            <div className="tile-label">{now.snowLvl != null ? 'Snow level' : 'Humidity'}</div>
-            <div className="tile-value">{now.snowLvl != null ? feet(now.snowLvl) : pct(now.rh)}</div>
-          </div>
+          ))}
         </div>
       )}
 

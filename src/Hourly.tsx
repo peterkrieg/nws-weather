@@ -14,7 +14,7 @@ import {
 } from 'recharts';
 import type { Hour } from './api';
 import { darkSpans } from './sun';
-import { compass, deg, feet, hourShort, inches, mph, pct } from './format';
+import { compass, deg, feet, hourShort, inches, mph, pct, uvCategory, uvValue } from './format';
 
 const HOUR = 3600e3;
 const C1 = 'var(--s1)';
@@ -225,7 +225,7 @@ function Bar({ x, y, width, height, fill }: any) {
   );
 }
 
-function AmountPanel({ frame, kind }: { frame: Frame; kind: 'qpf' | 'snow' }) {
+function AmountPanel({ frame, kind, title }: { frame: Frame; kind: 'qpf' | 'snow'; title: string }) {
   const bars = useMemo(() => buckets(frame.data, kind), [frame.data, kind]);
   if (!bars.length) return null;
   const rain = kind === 'qpf';
@@ -235,13 +235,13 @@ function AmountPanel({ frame, kind }: { frame: Frame; kind: 'qpf' | 'snow' }) {
   const hrsKey = rain ? 'qpfHrs' : 'snowHrs';
   return (
     <Panel
-      title={rain ? 'Rain (liquid precipitation, inches)' : 'Snowfall (inches)'}
+      title={title}
       frame={frame}
       domain={[0, top]}
       yTicks={[0, top / 2, top]}
       rows={(h) => [
         {
-          name: `${rain ? 'rain' : 'snow'} over ${h[hrsKey] ?? 1} hr`,
+          name: `${rain ? 'precip' : 'snow'} over ${h[hrsKey] ?? 1} hr`,
           value: inches(h[kind], rain ? 2 : 1),
           color,
         },
@@ -262,7 +262,7 @@ function HourlyTable({ data }: { data: Hour[] }) {
       <table>
         <thead>
           <tr>
-            {['Time', 'Forecast', 'Temp', 'Feels', 'Dew pt', 'Precip', 'Cloud', 'Humidity', 'Wind', 'Gust', 'Rain', 'Snow'].map((c) => (
+            {['Time', 'Forecast', 'Temp', 'Feels', 'Dew pt', 'Precip', 'Cloud', 'Humidity', 'Wind', 'Gust', 'Rain', 'Snow', 'UV'].map((c) => (
               <th key={c}>{c}</th>
             ))}
           </tr>
@@ -282,6 +282,7 @@ function HourlyTable({ data }: { data: Hour[] }) {
               <td>{mph(h.gust)}</td>
               <td>{h.qpf != null ? `${inches(h.qpf)} / ${h.qpfHrs}h` : '–'}</td>
               <td>{h.snow != null ? `${inches(h.snow, 1)} / ${h.snowHrs}h` : '–'}</td>
+              <td>{uvValue(h.uv)}</td>
             </tr>
           ))}
         </tbody>
@@ -290,7 +291,14 @@ function HourlyTable({ data }: { data: Hour[] }) {
   );
 }
 
-export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number; lon: number }) {
+interface Props {
+  hours: Hour[];
+  lat: number;
+  lon: number;
+  source: 'nws' | 'metno';
+}
+
+export default function Hourly({ hours, lat, lon, source }: Props) {
   const [range, setRange] = useState('48');
   const [tableOpen, setTableOpen] = useState(false);
   const hrs = Number(range);
@@ -304,6 +312,12 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
   const windTop = Math.max(10, Math.ceil((windMax * 1.3) / 5) * 5);
   const arrowEvery = hrs <= 24 ? 2 : hrs <= 48 ? 4 : 12;
   const windData = useMemo(() => data.map((h) => ({ ...h, arrowY: windTop * 0.93 })), [data, windTop]);
+
+  // Not every source has every series (no precip chance or gusts outside the US, UV only ~5 days out).
+  const has = (k: keyof Hour) => data.some((h) => h[k] != null);
+  const uvMax = extent(data, ['uv', 'uvClear'])[1];
+  const uvTop = Math.max(3, Math.ceil(uvMax));
+  const uvStep = uvTop <= 6 ? 1 : uvTop <= 12 ? 2 : 4;
 
   const hasAmounts = data.some((h) => (h.qpf ?? 0) > 0 || (h.snow ?? 0) > 0);
 
@@ -328,7 +342,7 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
           title="Temperature (°F)"
           legend={[
             { name: 'Temperature', color: C1 },
-            { name: 'Feels like', color: C2 },
+            ...(has('feels') ? [{ name: 'Feels like', color: C2 }] : []),
             { name: 'Dew point', color: C3 },
           ]}
           frame={frame}
@@ -338,7 +352,7 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
           head={(h) => h.short}
           rows={(h) => [
             { name: 'temperature', value: deg(h.temp), color: C1 },
-            { name: 'feels like', value: deg(h.feels), color: C2 },
+            ...(has('feels') ? [{ name: 'feels like', value: deg(h.feels), color: C2 }] : []),
             { name: 'dew point', value: deg(h.dew), color: C3 },
           ]}
         >
@@ -348,9 +362,9 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
         </Panel>
 
         <Panel
-          title="Precipitation chance, cloud cover, humidity (%)"
+          title={has('pop') ? 'Precipitation chance, cloud cover, humidity (%)' : 'Cloud cover and humidity (%)'}
           legend={[
-            { name: 'Chance of precip', color: C1 },
+            ...(has('pop') ? [{ name: 'Chance of precip', color: C1 }] : []),
             { name: 'Cloud cover', color: C2 },
             { name: 'Humidity', color: C3 },
           ]}
@@ -358,7 +372,7 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
           domain={[0, 100]}
           yTicks={[0, 25, 50, 75, 100]}
           rows={(h) => [
-            { name: 'chance of precip', value: pct(h.pop), color: C1 },
+            ...(has('pop') ? [{ name: 'chance of precip', value: pct(h.pop), color: C1 }] : []),
             { name: 'cloud cover', value: pct(h.sky), color: C2 },
             { name: 'humidity', value: pct(h.rh), color: C3 },
           ]}
@@ -368,23 +382,24 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
           <Area dataKey="pop" {...lineProps(C1)} fill={C1} fillOpacity={0.12} />
         </Panel>
 
-        <AmountPanel frame={frame} kind="qpf" />
-        <AmountPanel frame={frame} kind="snow" />
+        <AmountPanel
+          frame={frame}
+          kind="qpf"
+          title={source === 'nws' ? 'Rain (liquid precipitation, inches)' : 'Precipitation (rain or melted snow, inches)'}
+        />
+        <AmountPanel frame={frame} kind="snow" title="Snowfall (inches)" />
         {!hasAmounts && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
 
         <Panel
           title="Wind (mph)"
-          legend={[
-            { name: 'Sustained', color: C1 },
-            { name: 'Gusts', color: C2 },
-          ]}
+          legend={has('gust') ? [{ name: 'Sustained', color: C1 }, { name: 'Gusts', color: C2 }] : undefined}
           frame={frame}
           data={windData}
           domain={[0, windTop]}
           yTicks={niceTicks(0, windTop)}
           rows={(h) => [
             { name: h.dir != null ? `from ${compass(h.dir)}` : 'sustained', value: mph(h.wind), color: C1 },
-            { name: 'gusts', value: mph(h.gust), color: C2 },
+            ...(has('gust') ? [{ name: 'gusts', value: mph(h.gust), color: C2 }] : []),
           ]}
         >
           <Line dataKey="gust" {...lineProps(C2)} />
@@ -410,6 +425,26 @@ export default function Hourly({ hours, lat, lon }: { hours: Hour[]; lat: number
             }
           />
         </Panel>
+
+        {has('uv') && (
+          <Panel
+            title="UV index"
+            legend={[
+              { name: 'Forecast', color: C1 },
+              { name: 'If skies are clear', color: C2 },
+            ]}
+            frame={frame}
+            domain={[0, uvTop]}
+            yTicks={Array.from({ length: Math.floor(uvTop / uvStep) + 1 }, (_, i) => i * uvStep)}
+            rows={(h) => [
+              { name: uvCategory(h.uv) || 'forecast', value: uvValue(h.uv), color: C1 },
+              { name: 'if skies are clear', value: uvValue(h.uvClear), color: C2 },
+            ]}
+          >
+            <Line dataKey="uvClear" {...lineProps(C2)} />
+            <Area dataKey="uv" {...lineProps(C1)} fill={C1} fillOpacity={0.12} />
+          </Panel>
+        )}
       </div>
 
       <details className="card table-card" onToggle={(e) => setTableOpen(e.currentTarget.open)}>

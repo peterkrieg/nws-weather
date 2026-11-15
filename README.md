@@ -1,6 +1,6 @@
 # Weather
 
-A clean point-forecast app built on the [National Weather Service API](https://www.weather.gov/documentation/services-web-api). Search an address or click anywhere on the map (handy for trailheads) to get the NWS forecast for that exact spot.
+A clean point-forecast app. Search an address or click anywhere on the map (handy for trailheads) to get the forecast for that exact spot. In the US it uses the [National Weather Service API](https://www.weather.gov/documentation/services-web-api); everywhere else it falls back to MET Norway's global forecast.
 
 **Live:** https://nws-weather.pkrieg2.workers.dev
 
@@ -10,6 +10,8 @@ A clean point-forecast app built on the [National Weather Service API](https://w
 - Current conditions, active NWS alerts, and the 7-day forecast
 - Hourly charts with synced hover: temperature, precipitation chance, cloud cover, humidity, rain and snow amounts, wind and gusts
 - Map with OpenStreetMap, OpenTopoMap, USGS Topo and a hiking-trails overlay; click to load a forecast
+- UV index forecast (actual and clear-sky)
+- Works worldwide (reduced detail outside the US: no precipitation chance, snowfall amounts, alerts or written forecasts)
 - Ground elevation of the selected point
 - Sunrise, sunset, and first/last usable light (civil twilight)
 - Shareable URLs, light and dark mode, mobile friendly
@@ -18,7 +20,9 @@ A clean point-forecast app built on the [National Weather Service API](https://w
 
 | What | Source |
 | --- | --- |
-| Forecasts and alerts | api.weather.gov |
+| US forecasts and alerts | api.weather.gov |
+| Forecasts outside the US | [MET Norway Locationforecast](https://api.met.no/weatherapi/locationforecast/2.0/documentation) |
+| UV index | [Open-Meteo](https://open-meteo.com/) air-quality API (CAMS) |
 | Place search | [Photon](https://photon.komoot.io/) (OpenStreetMap data) |
 | Elevation | Terrarium terrain tiles (USGS 3DEP in the US) |
 | Sun times | Calculated in the browser |

@@ -78,6 +78,16 @@ export default function App() {
     };
   }, [loc]);
 
+  // Follow hash changes made outside the app (pasting a link into the address bar, back/forward).
+  useEffect(() => {
+    const onHash = () => {
+      const next = parseHash();
+      if (next) setLoc(next);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
   const pickPlace = useCallback((p: Place) => {
     setLoc({ ...p, source: 'search' });
     setRecents((prev) => {
@@ -147,21 +157,16 @@ export default function App() {
 
         {wx && wx.hours.length > 1 && (
           <section className="area-hourly">
-            <Hourly hours={wx.hours} lat={wx.lat} lon={wx.lon} />
+            <Hourly hours={wx.hours} lat={wx.lat} lon={wx.lon} source={wx.source} />
           </section>
         )}
       </main>
 
       <footer>
-        Forecast data from the{' '}
-        <a href="https://www.weather.gov/" target="_blank" rel="noopener">
-          National Weather Service
-        </a>
-        . Place search by{' '}
-        <a href="https://photon.komoot.io/" target="_blank" rel="noopener">
-          Photon
-        </a>{' '}
-        on OpenStreetMap data.
+        US forecasts and alerts: <a href="https://www.weather.gov/" target="_blank" rel="noopener">National Weather Service</a>.
+        Elsewhere: <a href="https://api.met.no/" target="_blank" rel="noopener">MET Norway</a>. UV index:{' '}
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CAMS). Place search:{' '}
+        <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a> on OpenStreetMap data.
       </footer>
     </>
   );

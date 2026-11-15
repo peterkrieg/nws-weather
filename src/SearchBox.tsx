@@ -45,7 +45,7 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
       searchPlaces(query, biasRef.current, ctl.signal)
         .then((r) => {
           setResults(r);
-          setNote(r.length ? null : 'No US places found');
+          setNote(r.length ? null : 'No places found');
           setBusy(false);
         })
         .catch((e) => {

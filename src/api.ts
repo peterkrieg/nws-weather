@@ -1,4 +1,5 @@
 import { compass, compassToDeg, hourLong } from './format';
+import { sunTimes } from './sun';
 
 const NWS = 'https://api.weather.gov';
 const PHOTON = 'https://photon.komoot.io/api/';
@@ -49,6 +50,8 @@ export interface Hour {
   snowStart?: number;
   snowHrs?: number;
   snowLvl: number | null;
+  uv: number | null;
+  uvClear: number | null;
   short?: string;
   isDay?: boolean;
   icon?: string;
@@ -63,6 +66,8 @@ export interface Alert {
 }
 
 export interface Weather {
+  /** 'nws' inside US coverage, 'metno' (MET Norway global forecast) everywhere else. */
+  source: 'nws' | 'metno';
   lat: number;
   lon: number;
   place: string;
@@ -189,6 +194,8 @@ function buildHours(grid: any, hourly: any, tz: string): Hour[] {
       snowStart: snow?.start,
       snowHrs: snow?.hrs,
       snowLvl: val('snowLvl'),
+      uv: null,
+      uvClear: null,
       short: m?.shortForecast,
       isDay: m?.isDaytime,
       icon: m?.icon,
@@ -198,18 +205,16 @@ function buildHours(grid: any, hourly: any, tz: string): Hour[] {
 }
 
 export async function fetchWeather(lat: number, lon: number): Promise<Weather> {
+  const uvPromise = fetchUv(lat, lon);
   let point: any;
   try {
     point = (await nws(`${NWS}/points/${coord(lat)},${coord(lon)}`)).properties;
   } catch (e) {
-    if (e instanceof HttpError && e.status < 500) {
-      throw new Error('The National Weather Service has no forecast for that spot. It only covers the US and its territories.');
-    }
+    // NWS answers 4xx for anywhere outside the US and its territories: use the global forecast there.
+    if (e instanceof HttpError && e.status < 500) return fetchIntl(lat, lon, uvPromise);
     throw new Error('The National Weather Service API did not respond. Try again in a moment.');
   }
-  if (!point?.forecastGridData) {
-    throw new Error('The National Weather Service has no forecast grid for that spot.');
-  }
+  if (!point?.forecastGridData) return fetchIntl(lat, lon, uvPromise);
 
   const [fc, hourly, grid, alerts] = await Promise.allSettled([
     nws(point.forecast),
@@ -244,13 +249,14 @@ export async function fetchWeather(lat: number, lon: number): Promise<Weather> {
   }));
 
   return {
+    source: 'nws',
     lat,
     lon,
     place,
     tz: point.timeZone,
     office: point.cwa ?? '',
     periods,
-    hours: buildHours(ok(grid), ok(hourly), point.timeZone),
+    hours: applyUv(buildHours(ok(grid), ok(hourly), point.timeZone), await uvPromise),
     alerts: (ok(alerts)?.features ?? []).map((f: any) => ({
       id: f.properties.id,
       event: f.properties.event ?? 'Alert',
@@ -258,6 +264,270 @@ export async function fetchWeather(lat: number, lon: number): Promise<Weather> {
       description: f.properties.description ?? '',
       instruction: f.properties.instruction ?? '',
     })),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// UV index (worldwide): Open-Meteo air-quality API, which carries the CAMS UV forecast.
+
+interface Uv {
+  tz: string | null;
+  byHour: Map<number, { uv: number | null; clear: number | null }>;
+}
+
+/** Never rejects: UV is an extra, so a failure just means no UV chart. */
+async function fetchUv(lat: number, lon: number): Promise<Uv> {
+  const byHour: Uv['byHour'] = new Map();
+  try {
+    const url =
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${coord(lat)}&longitude=${coord(lon)}` +
+      '&hourly=uv_index,uv_index_clear_sky&timeformat=unixtime&timezone=auto&forecast_days=7';
+    const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return { tz: null, byHour };
+    const j = await r.json();
+    (j.hourly?.time ?? []).forEach((t: number, i: number) => {
+      byHour.set(Math.round(t / 3600), { uv: j.hourly.uv_index?.[i] ?? null, clear: j.hourly.uv_index_clear_sky?.[i] ?? null });
+    });
+    return { tz: typeof j.timezone === 'string' && j.timezone !== 'GMT' ? j.timezone : null, byHour };
+  } catch {
+    return { tz: null, byHour };
+  }
+}
+
+function applyUv(hours: Hour[], uv: Uv): Hour[] {
+  for (const h of hours) {
+    const u = uv.byHour.get(Math.round(h.t / 3600e3));
+    if (u) {
+      h.uv = u.uv;
+      h.uvClear = u.clear;
+    }
+  }
+  return hours;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Outside the US: MET Norway's global Locationforecast. Hourly for about 2.5 days, then 6-hourly
+// out to about 9 days (interpolated to hourly here so the charts stay continuous). It has no
+// precipitation probability, snowfall amount or text forecast, and gusts only in the Nordics.
+
+const C_TO_F = (c: number) => (c * 9) / 5 + 32;
+const MS_TO_MPH = 2.23694;
+
+/** MET Norway symbol ("lightrainshowers_day") -> the NWS icon code that format.emoji() understands. */
+function symbolIcon(symbol: string | undefined, isDay: boolean) {
+  const s = (symbol ?? '').split('_')[0];
+  const code = !s
+    ? 'sct'
+    : s.includes('thunder')
+      ? 'tsra'
+      : s.includes('sleet')
+        ? 'sleet'
+        : s.includes('snow')
+          ? 'snow'
+          : s.includes('rainshowers')
+            ? 'rain_showers'
+            : s.includes('rain')
+              ? 'rain'
+              : s === 'fog'
+                ? 'fog'
+                : s === 'clearsky'
+                  ? 'skc'
+                  : s === 'fair'
+                    ? 'few'
+                    : s === 'partlycloudy'
+                      ? 'sct'
+                      : 'ovc';
+  return `/icons/land/${isDay ? 'day' : 'night'}/${code}`;
+}
+
+function symbolLabel(symbol: string | undefined, isDay: boolean) {
+  const s = (symbol ?? '').split('_')[0];
+  if (!s) return '';
+  if (s === 'clearsky') return isDay ? 'Sunny' : 'Clear';
+  if (s === 'fair') return isDay ? 'Mostly Sunny' : 'Mostly Clear';
+  if (s === 'partlycloudy') return 'Partly Cloudy';
+  return s
+    .replace(/^(light|heavy)s?(rain|sleet|snow)/, '$1 $2')
+    .replace('showers', ' showers')
+    .replace('andthunder', ' and thunder')
+    .replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    .replace(' And ', ' and ');
+}
+
+function intlHours(json: any, tz: string, lat: number, lon: number): Hour[] {
+  const ts: { eh: number; d: any }[] = (json?.properties?.timeseries ?? []).map((t: any) => ({
+    eh: Math.round(Date.parse(t.time) / 3600e3),
+    d: t.data ?? {},
+  }));
+  if (ts.length < 2) return [];
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', hour: 'numeric', hourCycle: 'h23' });
+  const start = Math.max(Math.floor(Date.now() / 3600e3), ts[0].eh);
+  const end = Math.min(ts[ts.length - 1].eh, start + 167);
+  const hours: Hour[] = [];
+  let i = 0;
+  for (let eh = start; eh <= end; eh++) {
+    while (i < ts.length - 2 && ts[i + 1].eh <= eh) i++;
+    const a = ts[i];
+    const b = ts[i + 1];
+    const frac = Math.min(1, Math.max(0, (eh - a.eh) / (b.eh - a.eh)));
+    const A = a.d.instant?.details ?? {};
+    const B = b.d.instant?.details ?? {};
+    const lerp = (k: string): number | null =>
+      A[k] == null ? (B[k] ?? null) : B[k] == null ? A[k] : A[k] + (B[k] - A[k]) * frac;
+    const tempC = lerp('air_temperature');
+    if (tempC == null) continue;
+    const dewC = lerp('dew_point_temperature');
+    const wind = lerp('wind_speed');
+    const gust = lerp('wind_speed_of_gust');
+
+    const t = eh * 3600e3;
+    const sun = sunTimes(t, lat, lon);
+    const isDay = sun.sunrise == null || sun.sunset == null ? true : t >= sun.sunrise && t < sun.sunset;
+    const block = a.d.next_1_hours ?? a.d.next_6_hours;
+    const mm = block?.details?.precipitation_amount;
+    const symbol = (a.d.next_1_hours ?? a.d.next_6_hours ?? a.d.next_12_hours)?.summary?.symbol_code;
+    const parts = fmt.formatToParts(new Date(t));
+    const hr = Number(parts.find((p) => p.type === 'hour')?.value) % 24;
+    const dow = parts.find((p) => p.type === 'weekday')?.value ?? '';
+    hours.push({
+      t,
+      hr,
+      dow,
+      label: `${dow} ${hourLong(hr)}`,
+      temp: C_TO_F(tempC),
+      // MET Norway's apparent temperature is experimental and gave implausible values, so it is left out.
+      feels: null,
+      dew: dewC != null ? C_TO_F(dewC) : null,
+      rh: lerp('relative_humidity'),
+      sky: lerp('cloud_area_fraction'),
+      pop: lerp('probability_of_precipitation'),
+      wind: wind != null ? wind * MS_TO_MPH : null,
+      gust: gust != null ? gust * MS_TO_MPH : null,
+      dir: A.wind_from_direction ?? null,
+      qpf: mm != null ? mm / 25.4 : null,
+      qpfStart: mm != null ? a.eh : undefined,
+      qpfHrs: mm != null ? (a.d.next_1_hours ? 1 : 6) : undefined,
+      snow: null,
+      snowLvl: null,
+      uv: null,
+      uvClear: null,
+      short: symbolLabel(symbol, isDay),
+      isDay,
+      icon: symbolIcon(symbol, isDay),
+    });
+  }
+  return hours;
+}
+
+/** Group hourly data into NWS-style day (6am-6pm) and night periods, with a generated summary. */
+function intlPeriods(hours: Hour[], tz: string): Period[] {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long' });
+  const groups: Hour[][] = [];
+  for (const h of hours) {
+    if (!groups.length || h.hr === 6 || h.hr === 18) groups.push([]);
+    groups[groups.length - 1].push(h);
+  }
+  const periods: Period[] = [];
+  groups.forEach((g, idx) => {
+    if (g.length < 3 || periods.length >= 14) return;
+    const first = g[0];
+    const isDaytime = first.hr >= 6 && first.hr < 18;
+    const day = weekday.format(first.t);
+    const name = idx === 0 ? (isDaytime ? 'Today' : first.hr < 6 ? 'Overnight' : 'Tonight') : isDaytime ? day : `${day} Night`;
+    const temps = g.map((h) => h.temp!);
+    const temperature = Math.round(isDaytime ? Math.max(...temps) : Math.min(...temps));
+
+    // Precipitation total: count each multi-hour bucket once.
+    const seen = new Set<number>();
+    let precip = 0;
+    for (const h of g) {
+      if (h.qpf != null && h.qpfStart != null && !seen.has(h.qpfStart)) {
+        seen.add(h.qpfStart);
+        precip += h.qpf;
+      }
+    }
+    // Headline condition: the most common one, looking only at wet hours when it is a wet period.
+    const pool = precip >= 0.02 ? g.filter((h) => (h.qpf ?? 0) > 0) : g;
+    const counts = new Map<string, { n: number; h: Hour }>();
+    for (const h of pool.length ? pool : g) {
+      const c = counts.get(h.short ?? '') ?? { n: 0, h };
+      c.n++;
+      counts.set(h.short ?? '', c);
+    }
+    const top = [...counts.values()].sort((x, y) => y.n - x.n)[0].h;
+
+    const winds = g.map((h) => h.wind ?? 0);
+    const lo = Math.round(Math.min(...winds));
+    const hi = Math.round(Math.max(...winds));
+    const windSpeed = lo === hi ? `${hi} mph` : `${lo} to ${hi} mph`;
+    const strongest = g.reduce((m, h) => ((h.wind ?? 0) > (m.wind ?? 0) ? h : m), first);
+    const windDirection = strongest.dir != null ? compass(strongest.dir) : '';
+    const gustMax = Math.max(...g.map((h) => h.gust ?? 0));
+
+    const detail = [
+      `${top.short}.`,
+      `${isDaytime ? 'High' : 'Low'} near ${temperature}°F.`,
+      `${windDirection} wind ${windSpeed}${gustMax > hi + 5 ? `, with gusts to ${Math.round(gustMax)} mph` : ''}.`.trim(),
+      precip >= 0.01 ? `Precipitation around ${precip.toFixed(2)} in (liquid equivalent).` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    periods.push({
+      name,
+      startTime: new Date(first.t).toISOString(),
+      isDaytime,
+      temperature,
+      shortForecast: top.short ?? '',
+      detailedForecast: detail,
+      icon: symbolIcon(undefined, isDaytime).replace(/[a-z_]+$/, (top.icon ?? '').split('/').pop() ?? 'sct'),
+      pop: null,
+      windSpeed,
+      windDirection,
+    });
+  });
+  return periods;
+}
+
+/** Nearest named place for a point (Photon reverse geocoding), e.g. "Chamonix-Mont-Blanc, France". */
+async function reverseName(lat: number, lon: number): Promise<string | null> {
+  try {
+    const r = await fetch(`https://photon.komoot.io/reverse?lat=${coord(lat)}&lon=${coord(lon)}&lang=en`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    const p = (await r.json()).features?.[0]?.properties;
+    const town = p?.city ?? p?.town ?? p?.village ?? p?.locality ?? p?.county ?? p?.state ?? p?.name;
+    return town ? [town, p.country !== town ? p.country : null].filter(Boolean).join(', ') : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchIntl(lat: number, lon: number, uvPromise: Promise<Uv>): Promise<Weather> {
+  let json: any;
+  try {
+    const r = await fetch(`https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=${coord(lat)}&lon=${coord(lon)}`);
+    if (!r.ok) throw new HttpError(r.status);
+    json = await r.json();
+  } catch {
+    throw new Error('No forecast is available for that spot right now. Try again in a moment.');
+  }
+  const [uv, place] = await Promise.all([uvPromise, reverseName(lat, lon)]);
+  // Time zone comes with the UV lookup; if that failed, approximate it from the longitude.
+  const offset = Math.round(lon / 15);
+  const tz = uv.tz ?? `Etc/GMT${offset <= 0 ? '+' : '-'}${Math.abs(offset)}`;
+  const hours = applyUv(intlHours(json, tz, lat, lon), uv);
+  if (!hours.length) throw new Error('No forecast is available for that spot right now. Try again in a moment.');
+  return {
+    source: 'metno',
+    lat,
+    lon,
+    place: place ?? `${lat.toFixed(3)}, ${lon.toFixed(3)}`,
+    tz,
+    office: '',
+    periods: intlPeriods(hours, tz),
+    hours,
+    alerts: [],
   };
 }
 
@@ -315,9 +585,7 @@ export interface Place {
   sub: string;
 }
 
-const NWS_COUNTRIES = new Set(['US', 'PR', 'GU', 'VI', 'AS', 'MP']);
-
-/** Address / place autocomplete via Photon (OpenStreetMap data), limited to where NWS has forecasts. */
+/** Address / place autocomplete via Photon (OpenStreetMap data). */
 export async function searchPlaces(q: string, bias: { lat: number; lon: number } | null, signal: AbortSignal): Promise<Place[]> {
   const params = new URLSearchParams({ q, limit: '12', lang: 'en' });
   if (bias) {
@@ -331,12 +599,12 @@ export async function searchPlaces(q: string, bias: { lat: number; lon: number }
   const out: Place[] = [];
   for (const f of json.features ?? []) {
     const p = f.properties ?? {};
-    if (!NWS_COUNTRIES.has(p.countrycode)) continue;
     const street = [p.housenumber, p.street].filter(Boolean).join(' ');
     const town = p.city ?? p.town ?? p.village ?? p.locality ?? p.county;
     const label: string = p.name ?? (street || town || p.state);
     if (!label) continue;
-    const sub = [p.name && street ? street : null, town !== label ? town : null, p.state !== label ? p.state : null]
+    const country = p.countrycode && p.countrycode !== 'US' && p.country !== label ? p.country : null;
+    const sub = [p.name && street ? street : null, town !== label ? town : null, p.state !== label ? p.state : null, country]
       .filter(Boolean)
       .join(', ');
     const key = `${label}|${sub}`;

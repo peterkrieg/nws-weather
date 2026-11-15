@@ -40,3 +40,8 @@ export function emoji(iconUrl: string | undefined, isDay = true): string {
   if (code === 'bkn') return day ? '🌥️' : '☁️';
   return '☁️';
 }
+
+export const uvValue = (v: number | null | undefined) => (v == null ? '–' : v < 10 ? v.toFixed(1) : String(Math.round(v)));
+/** WHO exposure categories for the UV index. */
+export const uvCategory = (v: number | null | undefined) =>
+  v == null ? '' : v < 3 ? 'low' : v < 6 ? 'moderate' : v < 8 ? 'high' : v < 11 ? 'very high' : 'extreme';
