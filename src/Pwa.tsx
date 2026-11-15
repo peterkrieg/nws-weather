@@ -103,9 +103,10 @@ export function UpdatePrompt() {
       if (!reg) return;
       // Home-screen apps stay open for days, and iOS only checks for a new version on a cold
       // launch. So also check hourly, and whenever the app comes back to the foreground.
-      let last = Date.now();
+      // The check is one small file, so a 10 s gap is only there to absorb rapid app switching.
+      let last = 0;
       const check = () => {
-        if (Date.now() - last < 60e3 || !navigator.onLine) return;
+        if (Date.now() - last < 10e3 || !navigator.onLine) return;
         last = Date.now();
         reg.update().catch(() => {});
       };
