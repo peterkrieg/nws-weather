@@ -41,7 +41,6 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
         { label: 'Wind', value: mph(now.wind), small: now.dir != null ? compass(now.dir) : undefined, has: now.wind },
         { label: 'Gusts', value: mph(now.gust), has: now.gust },
         { label: 'Chance of precip', value: pct(now.pop), has: now.pop },
-        { label: 'Snow level', value: feet(now.snowLvl), has: now.snowLvl },
         { label: 'Freezing level', value: feet(now.frzLvl), has: now.frzLvl },
         { label: 'Humidity', value: pct(now.rh), has: now.rh },
         { label: 'Cloud cover', value: pct(now.sky), has: now.sky },

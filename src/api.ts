@@ -720,18 +720,69 @@ export interface Place {
 }
 
 /** Address / place autocomplete via Photon (OpenStreetMap data). */
+/** How much a kind of OSM feature deserves to be suggested (cities beat villages beat cafés). */
+function kindWeight(key: string, value: string, hasHouseNumber: boolean): number {
+  if (key === 'place') return ({ city: 6, town: 5, village: 3, suburb: 3, hamlet: 2, locality: 2 } as Record<string, number>)[value] ?? 2;
+  if (hasHouseNumber) return 4; // the street address the user is typing
+  if (key === 'natural' || key === 'water' || key === 'waterway') return 4; // peaks, lakes, rivers
+  if (key === 'highway' && (value === 'trailhead' || value === 'path')) return 4;
+  if (key === 'tourism' && /camp|alpine_hut|viewpoint|wilderness_hut/.test(value)) return 4;
+  if (key === 'leisure' && /park|nature_reserve|sports_centre/.test(value)) return 3.5;
+  if (key === 'boundary' && /national_park|protected_area/.test(value)) return 4.5;
+  if (key === 'boundary' && value === 'administrative') return 4.5; // often how a town is tagged (Chamonix)
+  if (key === 'highway') return 0.5; // street names without a number
+  return 0.5; // shops, offices, companies, buildings
+}
+
+function km(aLat: number, aLon: number, bLat: number, bLon: number) {
+  const r = Math.PI / 180;
+  const x = (bLon - aLon) * r * Math.cos(((aLat + bLat) / 2) * r);
+  const y = (bLat - aLat) * r;
+  return Math.hypot(x, y) * 6371;
+}
+
+/**
+ * Address / place autocomplete via Photon (OpenStreetMap data).
+ * Photon's own ranking is either purely global ("Bost", France, before Boston) or, when biased,
+ * purely local (every "Boston Court" in town). So ask twice — near the current location and
+ * worldwide — and rank the union by what kind of place it is, how close it is, and how
+ * prominently each list placed it.
+ */
 export async function searchPlaces(q: string, bias: { lat: number; lon: number } | null, signal: AbortSignal): Promise<Place[]> {
-  const params = new URLSearchParams({ q, limit: '12', lang: 'en' });
-  if (bias) {
-    params.set('lat', coord(bias.lat));
-    params.set('lon', coord(bias.lon));
-  }
-  const r = await fetch(`${PHOTON}?${params}`, { signal });
-  if (!r.ok) throw new Error('Place search is unavailable right now.');
-  const json = await r.json();
+  const get = async (extra: Record<string, string>) => {
+    const params = new URLSearchParams({ q, limit: '10', lang: 'en', ...extra });
+    const r = await fetch(`${PHOTON}?${params}`, { signal });
+    if (!r.ok) throw new Error('Place search is unavailable right now.');
+    return ((await r.json()).features ?? []) as any[];
+  };
+  const [world, near] = await Promise.all([
+    get({}),
+    bias ? get({ lat: coord(bias.lat), lon: coord(bias.lon), zoom: '9', location_bias_scale: '0.2' }).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  const query = q.trim().toLowerCase();
+  const scored = new Map<string, { f: any; score: number }>();
+  const add = (list: any[], rankBonus: number) =>
+    list.forEach((f, i) => {
+      const p = f.properties ?? {};
+      const [lon, lat] = f.geometry.coordinates;
+      const id = `${p.osm_type}${p.osm_id}`;
+      let score = kindWeight(p.osm_key, p.osm_value, Boolean(p.housenumber) && /\d/.test(query)) + rankBonus * (1 - i / list.length);
+      if (bias) {
+        const d = km(bias.lat, bias.lon, lat, lon);
+        score += d < 80 ? 3.5 : d < 300 ? 2.5 : d < 1500 ? 1 : 0;
+      } else if (p.countrycode === 'US') score += 1;
+      if (String(p.name ?? '').toLowerCase() === query) score += 0.5;
+      const prev = scored.get(id);
+      if (!prev || prev.score < score) scored.set(id, { f, score });
+    });
+  add(world, 2);
+  add(near, 1);
+  const ranked = [...scored.values()].sort((a, b) => b.score - a.score).map((s) => s.f);
+
   const seen = new Set<string>();
   const out: Place[] = [];
-  for (const f of json.features ?? []) {
+  for (const f of ranked) {
     const p = f.properties ?? {};
     const street = [p.housenumber, p.street].filter(Boolean).join(' ');
     const town = p.city ?? p.town ?? p.village ?? p.locality ?? p.county;
