@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react';
 import type { ChartId, Item } from './store';
 import { SegmentedControl } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import {
   Area,
   CartesianGrid,
@@ -230,6 +231,20 @@ function AmountPanel({ frame, kind, title }: { frame: Frame; kind: 'qpf' | 'snow
   const bars = useMemo(() => buckets(frame.data, kind), [frame.data, kind]);
   if (!bars.length) return null;
   const rain = kind === 'qpf';
+  const total = bars.reduce((a, b) => a + b.v, 0);
+  // A chart of one sliver of a bar says less than a sentence: summarise trace amounts in one line.
+  if (total < (rain ? 0.1 : 0.5)) {
+    const first = frame.byT.get(bars[0].x1);
+    const last = frame.byT.get(bars[bars.length - 1].x2 - HOUR) ?? frame.byT.get(bars[bars.length - 1].x1);
+    const when = (h: Hour | undefined) => (h ? `${h.dow} ${hourShort(h.hr)}` : '');
+    const span = bars.length === 1 && first?.t === last?.t ? when(first) : `${when(first)}–${hourShort(((last?.hr ?? 0) + 1) % 24)}`;
+    return (
+      <div className="card panel panel-line">
+        <span className="panel-line-key" style={{ background: rain ? C1 : C2 }} />
+        <b>{rain ? 'Rain' : 'Snow'}</b> {inches(total, rain ? 2 : 1)} total · {span}
+      </div>
+    );
+  }
   const color = rain ? C1 : C2;
   const max = Math.max(...bars.map((b) => b.v));
   const top = [0.1, 0.2, 0.5, 1, 2, 4, 6, 10, 20, 40].find((t) => t >= max) ?? Math.ceil(max / 10) * 10;
@@ -301,7 +316,20 @@ interface Props {
   charts: Item<ChartId>[];
 }
 
+const TAB_LABEL: Record<ChartId, string> = {
+  temp: 'Temp',
+  humidity: 'Precip %',
+  rain: 'Rain',
+  snow: 'Snow',
+  wind: 'Wind',
+  uv: 'UV',
+  table: 'Table',
+};
+
 export default function Hourly({ hours, lat, lon, source, charts }: Props) {
+  // Phones get one chart at a time behind tabs instead of a long stack.
+  const phone = useMediaQuery('(max-width: 600px)') ?? false;
+  const [tab, setTab] = useState<ChartId>('temp');
   const [range, setRange] = useState('48');
   const [tableOpen, setTableOpen] = useState(false);
   const hrs = Number(range);
@@ -326,6 +354,21 @@ export default function Hourly({ hours, lat, lon, source, charts }: Props) {
   // One "no rain or snow" note, after whichever of the two amount charts is shown last.
   const amountIds = charts.filter((c) => c.on && (c.id === 'rain' || c.id === 'snow')).map((c) => c.id);
   const showNoAmounts = (id: ChartId) => !hasAmounts && amountIds[amountIds.length - 1] === id;
+  const hasBars = (k: 'qpf' | 'snow') => data.some((h) => (h[k] ?? 0) > 0);
+
+  // Tabs: enabled charts that have something to show (the table stays below, outside the tabs).
+  const tabs = charts.filter(
+    (c) =>
+      c.on &&
+      c.id !== 'table' &&
+      (c.id !== 'uv' || has('uv')) &&
+      (c.id !== 'rain' || hasBars('qpf')) &&
+      (c.id !== 'snow' || hasBars('snow')),
+  );
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
+  const visible = phone
+    ? charts.filter((c) => c.on && (c.id === activeTab || c.id === 'table'))
+    : charts.filter((c) => c.on);
 
   return (
     <>
@@ -343,8 +386,28 @@ export default function Hourly({ hours, lat, lon, source, charts }: Props) {
         />
       </div>
 
+      {phone && tabs.length > 1 && (
+        <div className="chart-tabs" role="tablist">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={t.id === activeTab}
+              className={t.id === activeTab ? 'is-on' : ''}
+              onClick={() => setTab(t.id)}
+            >
+              {TAB_LABEL[t.id]}
+            </button>
+          ))}
+        </div>
+      )}
+      {phone && !hasAmounts && charts.some((c) => c.on && (c.id === 'rain' || c.id === 'snow')) && (
+        <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>
+      )}
+
       <div className="charts">
-        {charts.filter((c) => c.on).map((c) => {
+        {visible.map((c) => {
           switch (c.id) {
             case 'temp':
               return (
@@ -403,14 +466,14 @@ export default function Hourly({ hours, lat, lon, source, charts }: Props) {
           kind="qpf"
           title={source === 'nws' ? 'Rain (liquid precipitation, inches)' : 'Precipitation (rain or melted snow, inches)'}
         />
-                  {showNoAmounts('rain') && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
+                  {!phone && showNoAmounts('rain') && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
                 </Fragment>
               );
             case 'snow':
               return (
                 <Fragment key={c.id}>
                   <AmountPanel frame={frame} kind="snow" title="Snowfall (inches)" />
-                  {showNoAmounts('snow') && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
+                  {!phone && showNoAmounts('snow') && <p className="panel-note">No measurable rain or snow in the forecast for this period.</p>}
                 </Fragment>
               );
             case 'wind':

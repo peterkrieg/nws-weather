@@ -57,6 +57,17 @@ export default function Settings({
       <h3 className="set-head">Sections</h3>
       <p className="set-note">On wide screens the map sits beside the section before or after it.</p>
       <OrderList items={prefs.sections} labels={SECTIONS} onChange={(sections) => setPrefs({ ...prefs, sections })} />
+      <h3 className="set-head">Current conditions</h3>
+      <ul className="order-list">
+        <li className={prefs.strip ? '' : 'is-off'}>
+          <Switch
+            size="sm"
+            checked={prefs.strip}
+            onChange={(e) => setPrefs({ ...prefs, strip: e.currentTarget.checked })}
+            label="Hour-by-hour strip"
+          />
+        </li>
+      </ul>
       <h3 className="set-head">Hourly charts</h3>
       <OrderList items={prefs.charts} labels={CHARTS} onChange={(charts) => setPrefs({ ...prefs, charts })} />
       <div className="set-foot">

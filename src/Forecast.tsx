@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Accordion } from '@mantine/core';
+import HourStrip from './HourStrip';
 import type { Alert, Period, Weather } from './api';
 import { clock, sunTimes } from './sun';
 import { compass, deg, emoji, feet, mph, pct } from './format';
@@ -27,12 +28,14 @@ export function Hero({
   pointElevFt,
   titleAction,
   status,
+  showStrip = true,
 }: {
   wx: Weather;
   title: string;
   pointElevFt: number | null | undefined;
   titleAction?: ReactNode;
   status?: ReactNode;
+  showStrip?: boolean;
 }) {
   // undefined = still loading, null = lookup failed
   const now = wx.hours[0];
@@ -114,6 +117,8 @@ export function Hero({
           {now?.feels != null && <div className="now-sub">Feels like {deg(now.feels)}</div>}
         </div>
       </div>
+
+      {showStrip && <HourStrip wx={wx} />}
 
       {now && (
         <div className="tiles">

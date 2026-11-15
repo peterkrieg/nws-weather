@@ -86,6 +86,8 @@ main.is-loading .sec:not(.sec-map) { opacity: 0.45; transition: opacity 0.15s; }
 main.is-loading .sec-map { opacity: 1; }
 .sec { min-width: 0; }
 .sec-hero { display: grid; gap: 12px; align-content: start; }
+/* Grid children default to min-width: auto, which would let the wide hour strip stretch the card. */
+.sec-hero > * { min-width: 0; }
 @media (min-width: 900px) {
   main {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -175,6 +177,42 @@ html, body { overscroll-behavior-y: contain; }
 .now-temp { font-size: 64px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
 .now-short { font-size: 17px; font-weight: 550; }
 .now-sub { color: var(--ink-2); font-size: 14px; }
+.strip {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+  margin: 0 -22px 14px;
+  padding: 2px 22px 6px;
+  scrollbar-width: none;
+}
+.strip::-webkit-scrollbar { display: none; }
+.strip-cell {
+  flex: none;
+  width: 52px;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  scroll-snap-align: start;
+  position: relative;
+  padding-top: 16px;
+}
+.strip-day {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.strip-newday { border-left: 1px solid var(--grid); }
+.strip-newday .strip-day { left: 6px; }
+.strip-time { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.strip-icon { font-size: 22px; line-height: 1.1; }
+.strip-temp { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.strip-pop { font-size: 11px; color: var(--s1); min-height: 14px; white-space: nowrap; }
+.strip-sun { width: 64px; }
+.strip-sun .strip-temp { font-size: 11px; font-weight: 550; color: var(--ink-2); }
 .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 520px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -364,6 +402,27 @@ html, body { overscroll-behavior-y: contain; }
 .aq-key-monitor, .aq-key-sensor { display: inline-block; background: var(--muted); border: 1.5px solid var(--surface); box-shadow: 0 0 0 1px var(--muted); }
 .aq-key-monitor { width: 12px; height: 9px; border-radius: 2px; }
 .aq-key-sensor { width: 9px; height: 9px; border-radius: 50%; }
+
+/* ---------- chart tabs (phones) ---------- */
+.chart-tabs { display: flex; gap: 6px; overflow-x: auto; margin: 0 0 10px; padding-bottom: 2px; scrollbar-width: none; }
+.chart-tabs::-webkit-scrollbar { display: none; }
+.chart-tabs button {
+  flex: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.chart-tabs button.is-on { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.panel-line { display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-size: 14px; color: var(--ink-2); }
+.panel-line b { color: var(--ink); font-weight: 600; }
+.panel-line-key { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 
 /* ---------- daily ---------- */
 .daily { overflow: hidden; }

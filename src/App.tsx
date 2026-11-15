@@ -233,6 +233,7 @@ export default function App() {
             wx={wx}
             title={title}
             pointElevFt={loading ? undefined : pointElevFt}
+            showStrip={prefs.strip}
             status={<Updated at={fetchedAt} offline={offline} loading={loading} onRefresh={refresh} />}
             titleAction={<FavoriteStar fav={currentFav} onAdd={addFavorite} onEdit={() => currentFav && setEditing(currentFav)} />}
           />
