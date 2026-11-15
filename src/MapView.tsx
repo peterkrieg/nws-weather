@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { LayersControl, MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { createElementObject, createLayerComponent } from '@react-leaflet/core';
 import type { Loc } from './api';
 import { AQ_LAYER, AirQualityLayer } from './AirQuality';
 
@@ -14,7 +15,22 @@ const pin = L.divIcon({ className: '', html: '<div class="pin"></div>', iconSize
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const ESRI_ATTR = 'Tiles &copy; <a href="https://www.esri.com">Esri</a>';
 /** Map styles. All are free to use without a key, with attribution. */
-export const BASES = [
+export const BASES: {
+  name: string;
+  note: string;
+  url: string;
+  attribution: string;
+  maxNativeZoom: number;
+  vector?: boolean;
+}[] = [
+  {
+    name: 'Outdoors',
+    note: 'OpenStreetMap with quiet grey roads, brown trails and hill shading.',
+    url: '',
+    attribution: `${OSM_ATTR} | <a href="https://openfreemap.org">OpenFreeMap</a> | <a href="https://openmaptiles.org">OpenMapTiles</a>`,
+    maxNativeZoom: 19,
+    vector: true,
+  },
   {
     name: 'Street',
     note: 'OpenStreetMap standard. Detailed, bold road colors.',
@@ -60,6 +76,41 @@ export const BASES = [
 ];
 
 const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name : 'Street');
+
+/**
+ * The Outdoors style is drawn by MapLibre (about 250 KB), so it's fetched only when that style is
+ * on screen. This stand-in layer is what the layer switch adds and removes.
+ */
+const LazyVector = L.Layer.extend({
+  initialize(this: L.Layer & { opts: { attribution: string } }, attribution: string) {
+    this.opts = { attribution };
+    (this as unknown as { options: L.LayerOptions }).options = { attribution };
+  },
+  onAdd(this: L.Layer & { gl?: L.Layer; on_?: boolean }, map: L.Map) {
+    this.on_ = true;
+    import('./vectorMap')
+      .then((m) => m.createOutdoorsLayer())
+      .then((gl) => {
+        if (!this.on_) return;
+        this.gl = gl;
+        gl.addTo(map);
+      })
+      .catch(() => {
+        /* offline or blocked: the map stays blank until another style is chosen */
+      });
+    return this;
+  },
+  onRemove(this: L.Layer & { gl?: L.Layer; on_?: boolean }) {
+    this.on_ = false;
+    this.gl?.remove();
+    this.gl = undefined;
+    return this;
+  },
+}) as unknown as new (attribution: string) => L.Layer;
+
+const VectorLayer = createLayerComponent<L.Layer, { attribution: string }>(
+  (props, ctx) => createElementObject(new LazyVector(props.attribution), ctx),
+);
 
 function save(key: string, value: string) {
   try {
@@ -237,7 +288,11 @@ export default function MapView({
         {BASES.map((b) => (
           <LayersControl.BaseLayer key={b.name} name={b.name} checked={b.name === base}>
             {/* CORS mode so the service worker can keep viewed tiles for offline use. */}
-            <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} crossOrigin="anonymous" />
+            {b.vector ? (
+              <VectorLayer attribution={b.attribution} />
+            ) : (
+              <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} crossOrigin="anonymous" />
+            )}
           </LayersControl.BaseLayer>
         ))}
         <LayersControl.Overlay name={AQ_LAYER} checked={aqOn}>

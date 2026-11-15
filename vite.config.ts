@@ -16,6 +16,7 @@ const tiles = (name: string, pattern: RegExp, maxEntries: number) => ({
 });
 
 export default defineConfig({
+  worker: { format: 'es' }, // MapLibre's worker is an ES module
   plugins: [
     react(),
     VitePWA({
@@ -44,6 +45,8 @@ export default defineConfig({
           tiles('map-tiles', /^https:\/\/(tile\.openstreetmap\.org|[abc]\.tile\.opentopomap\.org|basemap\.nationalmap\.gov)\//, 1500),
           tiles('trail-tiles', /^https:\/\/[abc]\.tile-cyclosm\.openstreetmap\.fr\//, 1500),
           tiles('esri-tiles', /^https:\/\/server\.arcgisonline\.com\//, 1000),
+          // Outdoors style: vector tiles, fonts and icons from OpenFreeMap.
+          tiles('openfreemap', /^https:\/\/tiles\.openfreemap\.org\//, 3000),
           tiles('terrain', /^https:\/\/s3\.amazonaws\.com\/elevation-tiles-prod\//, 200),
           // Forecasts are kept by the app itself (src/store.ts) so it knows how old they are.
           // Air quality and place search are live by nature: never served from a stale cache.

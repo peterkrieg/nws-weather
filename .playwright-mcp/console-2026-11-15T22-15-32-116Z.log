@@ -1,1 +1,35 @@
 [    8475ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8765/favicon.ico:1
+[ 1199264ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=2a61ba3e:15803
+[ 1199395ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=2a61ba3e:15803
+[ 1200056ms] [ERROR] Error: Worker failed to load. Check that the worker URL is correct.
+    at Worker.<anonymous> (http://localhost:5180/node_modules/.vite/deps/@maplibre_maplibre-gl-leaflet.js?v=fe38650e:9427:32) @ http://localhost:5180/@vite/client:364
+[ 1200057ms] [ERROR] Error: Worker failed to load. Check that the worker URL is correct.
+    at Worker.<anonymous> (http://localhost:5180/node_modules/.vite/deps/@maplibre_maplibre-gl-leaflet.js?v=fe38650e:9427:32) @ http://localhost:5180/@vite/client:364
+[ 1200057ms] [ERROR] Error: Worker failed to load. Check that the worker URL is correct.
+    at Worker.<anonymous> (http://localhost:5180/node_modules/.vite/deps/@maplibre_maplibre-gl-leaflet.js?v=fe38650e:9427:32) @ http://localhost:5180/@vite/client:364
+[ 1235416ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://localhost:5180/src/Settings.tsx?t=1794782167521:1
+[ 1235416ms] [ERROR] [vite] Failed to reload /src/Settings.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:5180/@vite/client:364
+[ 1235647ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5180/@vite/client:1078
+[ 1235813ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=e9d6acdd:15803
+[ 1236636ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=ff0b8a79:15803
+[ 1237459ms] [WARNING] layers[highway-shield-non-us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1237459ms] [WARNING] layers[highway-shield-us-interstate].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1237459ms] [WARNING] layers[road_shield_us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1237474ms] [WARNING] layers[highway-shield-non-us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1237475ms] [WARNING] layers[highway-shield-us-interstate].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1237475ms] [WARNING] layers[road_shield_us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1237531ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=ff0b8a79:15803
+[ 1238112ms] [WARNING] layers[highway-shield-non-us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1238112ms] [WARNING] layers[highway-shield-us-interstate].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1238113ms] [WARNING] layers[road_shield_us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1238151ms] [WARNING] layers[highway-shield-non-us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1238151ms] [WARNING] layers[highway-shield-us-interstate].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1238151ms] [WARNING] layers[road_shield_us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1291728ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=ff0b8a79:15803
+[ 1292203ms] [WARNING] layers[highway-shield-non-us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1292203ms] [WARNING] layers[highway-shield-us-interstate].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1292204ms] [WARNING] layers[road_shield_us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1292244ms] [WARNING] layers[highway-shield-non-us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1292244ms] [WARNING] layers[highway-shield-us-interstate].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1292244ms] [WARNING] layers[road_shield_us].filter[1]: Expected value to be of type number, but found null instead. Falling back to false. @ http://localhost:5180/@vite/client:364
+[ 1344750ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5180/@vite/client:1078

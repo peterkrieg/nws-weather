@@ -81,7 +81,7 @@ export interface Prefs {
 const defaults = <Id extends string>(labels: Record<Id, string>): Item<Id>[] =>
   (Object.keys(labels) as Id[]).map((id) => ({ id, on: true }));
 
-export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Street' });
+export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Outdoors' });
 
 /** Keep saved order, drop ids that no longer exist, append ones added since. */
 function reconcile<Id extends string>(saved: Item<Id>[] | undefined, labels: Record<Id, string>): Item<Id>[] {
@@ -95,7 +95,7 @@ export const normalizePrefs = (p: Partial<Prefs> | null): Prefs => ({
   charts: reconcile(p?.charts, CHARTS),
   strip: p?.strip ?? true,
   // Before prefs existed the map kept its own setting.
-  basemap: p?.basemap ?? legacyBasemap() ?? 'Street',
+  basemap: p?.basemap ?? legacyBasemap() ?? 'Outdoors',
 });
 
 function legacyBasemap(): string | null {
