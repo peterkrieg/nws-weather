@@ -2,7 +2,7 @@
 
 A clean point-forecast app. Search an address or click anywhere on the map (handy for trailheads) to get the forecast for that exact spot. In the US it uses the [National Weather Service API](https://www.weather.gov/documentation/services-web-api); everywhere else it uses Open-Meteo, which picks the best national weather model for each region, with MET Norway as a backup.
 
-**Live:** https://nws-weather.pkrieg2.workers.dev/weather/
+**Live:** https://weather.peterkrieg.com
 
 ## Features
 
@@ -38,6 +38,6 @@ React, TypeScript, Vite, Mantine, Recharts, react-leaflet. Hosted on Cloudflare 
 ```sh
 npm install
 npm run dev      # local dev server
-npm run build    # typecheck and build to dist/weather/
+npm run build    # typecheck and build to dist/
 npm run deploy   # build and deploy to Cloudflare (requires `wrangler login`)
 ```
