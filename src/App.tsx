@@ -164,8 +164,8 @@ export default function App() {
 
       <footer>
         US forecasts and alerts: <a href="https://www.weather.gov/" target="_blank" rel="noopener">National Weather Service</a>.
-        Elsewhere: <a href="https://api.met.no/" target="_blank" rel="noopener">MET Norway</a>. UV index:{' '}
-        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CAMS). Place search:{' '}
+        Elsewhere: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0), with{' '}
+        <a href="https://api.met.no/" target="_blank" rel="noopener">MET Norway</a> as backup. UV index: Open-Meteo (CAMS). Place search:{' '}
         <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a> on OpenStreetMap data.
       </footer>
     </>

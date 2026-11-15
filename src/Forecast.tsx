@@ -31,7 +31,9 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
   const sourceUrl =
     wx.source === 'nws'
       ? `https://forecast.weather.gov/MapClick.php?lat=${wx.lat.toFixed(4)}&lon=${wx.lon.toFixed(4)}`
-      : `https://www.yr.no/en/forecast/daily-table/${wx.lat.toFixed(3)},${wx.lon.toFixed(3)}`;
+      : wx.source === 'openmeteo'
+        ? 'https://open-meteo.com/'
+        : `https://www.yr.no/en/forecast/daily-table/${wx.lat.toFixed(3)},${wx.lon.toFixed(3)}`;
 
   // Show the first four of these that the forecast source actually provides for this spot.
   const tiles: { label: string; value: string; small?: string }[] = now
@@ -40,6 +42,7 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
         { label: 'Gusts', value: mph(now.gust), has: now.gust },
         { label: 'Chance of precip', value: pct(now.pop), has: now.pop },
         { label: 'Snow level', value: feet(now.snowLvl), has: now.snowLvl },
+        { label: 'Freezing level', value: feet(now.frzLvl), has: now.frzLvl },
         { label: 'Humidity', value: pct(now.rh), has: now.rh },
         { label: 'Cloud cover', value: pct(now.sky), has: now.sky },
         { label: 'Dew point', value: deg(now.dew), has: now.dew },
@@ -68,7 +71,7 @@ export function Hero({ wx, title, pointElevFt }: { wx: Weather; title: string; p
           .join(' · ')}{' '}
         ·{' '}
         <a href={sourceUrl} target="_blank" rel="noopener">
-          {wx.source === 'nws' ? 'weather.gov' : 'MET Norway forecast'}
+          {wx.source === 'nws' ? 'weather.gov' : wx.source === 'openmeteo' ? 'Open-Meteo forecast' : 'MET Norway forecast'}
         </a>{' '}
         ·{' '}
         <span className="elev">

@@ -52,6 +52,8 @@ export interface Hour {
   snowLvl: number | null;
   uv: number | null;
   uvClear: number | null;
+  /** Freezing level in feet (Open-Meteo only; NWS gives a snow level instead). */
+  frzLvl: number | null;
   short?: string;
   isDay?: boolean;
   icon?: string;
@@ -66,8 +68,8 @@ export interface Alert {
 }
 
 export interface Weather {
-  /** 'nws' inside US coverage, 'metno' (MET Norway global forecast) everywhere else. */
-  source: 'nws' | 'metno';
+  /** 'nws' inside US coverage. Elsewhere 'openmeteo', or 'metno' (MET Norway) when Open-Meteo is unreachable. */
+  source: 'nws' | 'openmeteo' | 'metno';
   lat: number;
   lon: number;
   place: string;
@@ -196,6 +198,7 @@ function buildHours(grid: any, hourly: any, tz: string): Hour[] {
       snowLvl: val('snowLvl'),
       uv: null,
       uvClear: null,
+      frzLvl: null,
       short: m?.shortForecast,
       isDay: m?.isDaytime,
       icon: m?.icon,
@@ -297,7 +300,7 @@ async function fetchUv(lat: number, lon: number): Promise<Uv> {
 function applyUv(hours: Hour[], uv: Uv): Hour[] {
   for (const h of hours) {
     const u = uv.byHour.get(Math.round(h.t / 3600e3));
-    if (u) {
+    if (u && h.uv == null) {
       h.uv = u.uv;
       h.uvClear = u.clear;
     }
@@ -306,7 +309,105 @@ function applyUv(hours: Hour[], uv: Uv): Hour[] {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Outside the US: MET Norway's global Locationforecast. Hourly for about 2.5 days, then 6-hourly
+// Outside the US: Open-Meteo. Its default "best match" already picks the best model per region
+// (AROME in France, ICON-D2 in central Europe, UKMO in the UK, MET Nordic in Scandinavia, JMA in
+// Japan, ...) over a global ECMWF / ICON / GFS base, and adjusts temperature to the point's
+// elevation using a 90 m terrain model.
+
+/** WMO weather code -> [label, NWS icon code that format.emoji() understands]. */
+function wmo(code: number | null, isDay: boolean): [string, string] {
+  switch (code) {
+    case 0: return [isDay ? 'Sunny' : 'Clear', 'skc'];
+    case 1: return [isDay ? 'Mostly Sunny' : 'Mostly Clear', 'few'];
+    case 2: return ['Partly Cloudy', 'sct'];
+    case 3: return ['Cloudy', 'ovc'];
+    case 45: case 48: return ['Fog', 'fog'];
+    case 51: return ['Light Drizzle', 'rain'];
+    case 53: case 55: return ['Drizzle', 'rain'];
+    case 56: case 57: return ['Freezing Drizzle', 'fzra'];
+    case 61: return ['Light Rain', 'rain'];
+    case 63: return ['Rain', 'rain'];
+    case 65: return ['Heavy Rain', 'rain'];
+    case 66: case 67: return ['Freezing Rain', 'fzra'];
+    case 71: return ['Light Snow', 'snow'];
+    case 73: case 77: return ['Snow', 'snow'];
+    case 75: return ['Heavy Snow', 'snow'];
+    case 80: return ['Light Rain Showers', 'rain_showers'];
+    case 81: return ['Rain Showers', 'rain_showers'];
+    case 82: return ['Heavy Rain Showers', 'rain_showers'];
+    case 85: return ['Snow Showers', 'snow'];
+    case 86: return ['Heavy Snow Showers', 'snow'];
+    case 95: return ['Thunderstorms', 'tsra'];
+    case 96: case 99: return ['Thunderstorms with Hail', 'tsra'];
+    default: return ['', 'sct'];
+  }
+}
+
+async function fetchOpenMeteo(lat: number, lon: number): Promise<{ tz: string; hours: Hour[] }> {
+  const vars = [
+    'temperature_2m', 'apparent_temperature', 'dew_point_2m', 'relative_humidity_2m', 'cloud_cover',
+    'precipitation_probability', 'precipitation', 'snowfall', 'wind_speed_10m', 'wind_gusts_10m',
+    'wind_direction_10m', 'freezing_level_height', 'weather_code', 'is_day', 'uv_index', 'uv_index_clear_sky',
+  ];
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${coord(lat)}&longitude=${coord(lon)}&hourly=${vars.join(',')}` +
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timeformat=unixtime&timezone=auto&forecast_days=8';
+  const r = await fetch(url, { signal: AbortSignal.timeout(7000) });
+  if (!r.ok) throw new HttpError(r.status);
+  const j = await r.json();
+  const h = j.hourly ?? {};
+  const tz: string = j.timezone ?? 'UTC';
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', hour: 'numeric', hourCycle: 'h23' });
+  const now = Math.floor(Date.now() / 3600e3);
+  const at = (k: string, i: number): number | null => h[k]?.[i] ?? null;
+  const hours: Hour[] = [];
+  (h.time ?? []).forEach((sec: number, i: number) => {
+    const eh = Math.round(sec / 3600);
+    const temp = at('temperature_2m', i);
+    if (eh < now || eh > now + 167 || temp == null) return;
+    const t = eh * 3600e3;
+    const parts = fmt.formatToParts(new Date(t));
+    const hr = Number(parts.find((p) => p.type === 'hour')?.value) % 24;
+    const dow = parts.find((p) => p.type === 'weekday')?.value ?? '';
+    const isDay = at('is_day', i) !== 0;
+    const [short, code] = wmo(at('weather_code', i), isDay);
+    const qpf = at('precipitation', i);
+    const snow = at('snowfall', i);
+    hours.push({
+      t,
+      hr,
+      dow,
+      label: `${dow} ${hourLong(hr)}`,
+      temp,
+      feels: at('apparent_temperature', i),
+      dew: at('dew_point_2m', i),
+      rh: at('relative_humidity_2m', i),
+      sky: at('cloud_cover', i),
+      pop: at('precipitation_probability', i),
+      wind: at('wind_speed_10m', i),
+      gust: at('wind_gusts_10m', i),
+      dir: at('wind_direction_10m', i),
+      qpf,
+      qpfStart: qpf != null ? eh : undefined,
+      qpfHrs: qpf != null ? 1 : undefined,
+      snow,
+      snowStart: snow != null ? eh : undefined,
+      snowHrs: snow != null ? 1 : undefined,
+      snowLvl: null,
+      uv: at('uv_index', i),
+      uvClear: at('uv_index_clear_sky', i),
+      frzLvl: at('freezing_level_height', i),
+      short,
+      isDay,
+      icon: `/icons/land/${isDay ? 'day' : 'night'}/${code}`,
+    });
+  });
+  if (hours.length < 2) throw new Error('Open-Meteo returned no forecast');
+  return { tz, hours };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fallback outside the US: MET Norway's global Locationforecast. Hourly for about 2.5 days, then 6-hourly
 // out to about 9 days (interpolated to hourly here so the charts stay continuous). It has no
 // precipitation probability, snowfall amount or text forecast, and gusts only in the Nordics.
 
@@ -411,6 +512,7 @@ function intlHours(json: any, tz: string, lat: number, lon: number): Hour[] {
       snowLvl: null,
       uv: null,
       uvClear: null,
+      frzLvl: null,
       short: symbolLabel(symbol, isDay),
       isDay,
       icon: symbolIcon(symbol, isDay),
@@ -464,11 +566,24 @@ function intlPeriods(hours: Hour[], tz: string): Period[] {
     const windDirection = strongest.dir != null ? compass(strongest.dir) : '';
     const gustMax = Math.max(...g.map((h) => h.gust ?? 0));
 
+    const pops = g.map((h) => h.pop).filter((v): v is number => v != null);
+    const pop = pops.length ? Math.round(Math.max(...pops)) : null;
+    const snowSeen = new Set<number>();
+    let snow = 0;
+    for (const h of g) {
+      if (h.snow != null && h.snowStart != null && !snowSeen.has(h.snowStart)) {
+        snowSeen.add(h.snowStart);
+        snow += h.snow;
+      }
+    }
+
     const detail = [
       `${top.short}.`,
       `${isDaytime ? 'High' : 'Low'} near ${temperature}°F.`,
       `${windDirection} wind ${windSpeed}${gustMax > hi + 5 ? `, with gusts to ${Math.round(gustMax)} mph` : ''}.`.trim(),
+      pop != null && pop >= 10 ? `Chance of precipitation ${pop}%.` : '',
       precip >= 0.01 ? `Precipitation around ${precip.toFixed(2)} in (liquid equivalent).` : '',
+      snow >= 0.1 ? `Snowfall around ${snow.toFixed(1)} in.` : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -481,7 +596,7 @@ function intlPeriods(hours: Hour[], tz: string): Period[] {
       shortForecast: top.short ?? '',
       detailedForecast: detail,
       icon: symbolIcon(undefined, isDaytime).replace(/[a-z_]+$/, (top.icon ?? '').split('/').pop() ?? 'sct'),
-      pop: null,
+      pop,
       windSpeed,
       windDirection,
     });
@@ -504,6 +619,25 @@ async function reverseName(lat: number, lon: number): Promise<string | null> {
 }
 
 async function fetchIntl(lat: number, lon: number, uvPromise: Promise<Uv>): Promise<Weather> {
+  const placePromise = reverseName(lat, lon);
+  const fallbackPlace = `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+  try {
+    const { tz, hours } = await fetchOpenMeteo(lat, lon);
+    return {
+      source: 'openmeteo',
+      lat,
+      lon,
+      place: (await placePromise) ?? fallbackPlace,
+      tz,
+      office: '',
+      periods: intlPeriods(hours, tz),
+      hours,
+      alerts: [],
+    };
+  } catch {
+    // Open-Meteo unreachable or returned nothing usable: fall back to MET Norway below.
+  }
+
   let json: any;
   try {
     const r = await fetch(`https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=${coord(lat)}&lon=${coord(lon)}`);
@@ -512,7 +646,7 @@ async function fetchIntl(lat: number, lon: number, uvPromise: Promise<Uv>): Prom
   } catch {
     throw new Error('No forecast is available for that spot right now. Try again in a moment.');
   }
-  const [uv, place] = await Promise.all([uvPromise, reverseName(lat, lon)]);
+  const [uv, place] = await Promise.all([uvPromise, placePromise]);
   // Time zone comes with the UV lookup; if that failed, approximate it from the longitude.
   const offset = Math.round(lon / 15);
   const tz = uv.tz ?? `Etc/GMT${offset <= 0 ? '+' : '-'}${Math.abs(offset)}`;
@@ -522,7 +656,7 @@ async function fetchIntl(lat: number, lon: number, uvPromise: Promise<Uv>): Prom
     source: 'metno',
     lat,
     lon,
-    place: place ?? `${lat.toFixed(3)}, ${lon.toFixed(3)}`,
+    place: place ?? fallbackPlace,
     tz,
     office: '',
     periods: intlPeriods(hours, tz),

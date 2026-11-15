@@ -1,6 +1,6 @@
 # Weather
 
-A clean point-forecast app. Search an address or click anywhere on the map (handy for trailheads) to get the forecast for that exact spot. In the US it uses the [National Weather Service API](https://www.weather.gov/documentation/services-web-api); everywhere else it falls back to MET Norway's global forecast.
+A clean point-forecast app. Search an address or click anywhere on the map (handy for trailheads) to get the forecast for that exact spot. In the US it uses the [National Weather Service API](https://www.weather.gov/documentation/services-web-api); everywhere else it uses Open-Meteo, which picks the best national weather model for each region, with MET Norway as a backup.
 
 **Live:** https://nws-weather.pkrieg2.workers.dev
 
@@ -11,7 +11,7 @@ A clean point-forecast app. Search an address or click anywhere on the map (hand
 - Hourly charts with synced hover: temperature, precipitation chance, cloud cover, humidity, rain and snow amounts, wind and gusts
 - Map with OpenStreetMap, OpenTopoMap, USGS Topo and a hiking-trails overlay; click to load a forecast
 - UV index forecast (actual and clear-sky)
-- Works worldwide (reduced detail outside the US: no precipitation chance, snowfall amounts, alerts or written forecasts)
+- Works worldwide (outside the US there are no alerts, and daily summaries are generated rather than written by forecasters)
 - Ground elevation of the selected point
 - Sunrise, sunset, and first/last usable light (civil twilight)
 - Shareable URLs, light and dark mode, mobile friendly
@@ -21,8 +21,8 @@ A clean point-forecast app. Search an address or click anywhere on the map (hand
 | What | Source |
 | --- | --- |
 | US forecasts and alerts | api.weather.gov |
-| Forecasts outside the US | [MET Norway Locationforecast](https://api.met.no/weatherapi/locationforecast/2.0/documentation) |
-| UV index | [Open-Meteo](https://open-meteo.com/) air-quality API (CAMS) |
+| Forecasts outside the US | [Open-Meteo](https://open-meteo.com/) (CC BY 4.0, non-commercial use); [MET Norway](https://api.met.no/weatherapi/locationforecast/2.0/documentation) if Open-Meteo is unreachable |
+| UV index | Open-Meteo (CAMS) |
 | Place search | [Photon](https://photon.komoot.io/) (OpenStreetMap data) |
 | Elevation | Terrarium terrain tiles (USGS 3DEP in the US) |
 | Sun times | Calculated in the browser |

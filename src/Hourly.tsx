@@ -246,6 +246,7 @@ function AmountPanel({ frame, kind, title }: { frame: Frame; kind: 'qpf' | 'snow
           color,
         },
         ...(h.snowLvl != null ? [{ name: 'snow level', value: feet(h.snowLvl) }] : []),
+        ...(h.frzLvl != null ? [{ name: 'freezing level', value: feet(h.frzLvl) }] : []),
       ]}
     >
       {bars.map((b) => (
@@ -295,7 +296,7 @@ interface Props {
   hours: Hour[];
   lat: number;
   lon: number;
-  source: 'nws' | 'metno';
+  source: 'nws' | 'openmeteo' | 'metno';
 }
 
 export default function Hourly({ hours, lat, lon, source }: Props) {
