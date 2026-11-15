@@ -3,8 +3,9 @@
 //
 // The map asks for 0.5° grid cells. For each cell:
 //   - AirNow: every official monitor (Utah DEQ etc.), cached 15 min.
-//   - PurpleAir: a thinned sample, at most one sensor per ~2.5 km square. The sample (just sensor
-//     ids, which is cheap to look up) is chosen once a week; readings for those ids are cached 15 min.
+//   - PurpleAir: a thinned sample, at most one sensor per SAMPLE square. The sample (ids and
+//     positions) is chosen once a week; refreshes then ask only for PM2.5 and humidity of those
+//     ids, cached 30 min. PurpleAir bills per sensor per field, so both halves are kept lean.
 
 interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
@@ -13,8 +14,9 @@ interface Env {
 }
 
 const CELL = 0.5; // degrees per requested grid cell
-const SAMPLE = 0.025; // degrees: keep one PurpleAir sensor per square this size
-const READ_TTL = 15 * 60;
+const SAMPLE = 0.04; // degrees: keep one PurpleAir sensor per square this size (~2.8 × 2 miles at 40°N)
+const READ_TTL = 15 * 60; // AirNow (free; it only updates hourly anyway)
+const PA_TTL = 30 * 60; // PurpleAir readings: each refresh costs points
 const SAMPLE_TTL = 7 * 24 * 3600;
 
 const cache = () => (caches as unknown as { default: Cache }).default;
@@ -154,35 +156,47 @@ async function purpleAir(env: Env, fields: string[], extra: Record<string, strin
   const params = new URLSearchParams({ fields: fields.join(','), location_type: '0', max_age: '3600', ...extra });
   const r = await fetch(`https://api.purpleair.com/v1/sensors?${params}`, { headers: { 'X-API-Key': env.PURPLEAIR_KEY! } });
   if (!r.ok) throw new Error(`PurpleAir ${r.status}`);
-  const json = (await r.json()) as { fields: string[]; data: (number | null)[][] };
-  return json.data.map((row) => Object.fromEntries(json.fields.map((f, i) => [f, row[i]])) as Record<string, number | null>);
+  const json = (await r.json()) as { fields: string[]; data: (number | null)[][]; data_time_stamp: number };
+  return {
+    time: json.data_time_stamp,
+    rows: json.data.map((row) => Object.fromEntries(json.fields.map((f, i) => [f, row[i]])) as Record<string, number | null>),
+  };
 }
 
-async function purpleAirSample(env: Env, s: number, w: number): Promise<number[]> {
-  const rows = await purpleAir(env, ['latitude', 'longitude'], {
+interface Sampled {
+  id: number;
+  lat: number;
+  lon: number;
+}
+
+async function purpleAirSample(env: Env, s: number, w: number): Promise<Sampled[]> {
+  const { rows } = await purpleAir(env, ['latitude', 'longitude'], {
     nwlat: String(s + CELL),
     nwlng: String(w),
     selat: String(s),
     selng: String(w + CELL),
   });
-  const picked = new Map<string, number>();
+  const picked = new Map<string, Sampled>();
   for (const row of rows) {
     if (row.latitude == null || row.longitude == null) continue;
     const k = `${Math.floor(row.latitude / SAMPLE)},${Math.floor(row.longitude / SAMPLE)}`;
-    if (!picked.has(k)) picked.set(k, row.sensor_index!);
+    if (!picked.has(k)) picked.set(k, { id: row.sensor_index!, lat: row.latitude, lon: row.longitude });
   }
   return [...picked.values()];
 }
 
-async function purpleAirReadings(env: Env, ids: number[]): Promise<Sensor[]> {
-  if (!ids.length) return [];
-  const rows = await purpleAir(env, ['latitude', 'longitude', 'pm2.5_cf_1', 'humidity', 'last_seen'], { show_only: ids.join(',') });
+async function purpleAirReadings(env: Env, sample: Sampled[]): Promise<Sensor[]> {
+  if (!sample.length) return [];
+  const where = new Map(sample.map((p) => [p.id, p]));
+  // max_age keeps out sensors that haven't reported in the last hour, so the batch time stands in for each reading's age.
+  const { time, rows } = await purpleAir(env, ['pm2.5_cf_1', 'humidity'], { show_only: [...where.keys()].join(',') });
   const out: Sensor[] = [];
   for (const row of rows) {
     const raw = row['pm2.5_cf_1'];
-    if (raw == null || row.latitude == null || row.longitude == null) continue;
+    const p = where.get(row.sensor_index!);
+    if (raw == null || !p) continue;
     const pm = correctPurpleAir(raw, row.humidity ?? 40);
-    out.push({ id: row.sensor_index!, lat: row.latitude, lon: row.longitude, pm: Math.round(pm * 10) / 10, aqi: pmToAqi(pm), seen: row.last_seen ?? 0 });
+    out.push({ id: p.id, lat: p.lat, lon: p.lon, pm: Math.round(pm * 10) / 10, aqi: pmToAqi(pm), seen: time });
   }
   return out;
 }
@@ -208,8 +222,8 @@ async function airQuality(url: URL, env: Env) {
       ? cached(`airnow/${cell}`, READ_TTL, () => airNow(env, s, w)).catch((e: Error) => e.message)
       : null,
     env.PURPLEAIR_KEY
-      ? cached(`pa-sample/${cell}`, SAMPLE_TTL, () => purpleAirSample(env, s, w))
-          .then((ids) => cached(`pa/${cell}`, READ_TTL, () => purpleAirReadings(env, ids)))
+      ? cached(`pa-sample-v2/${cell}`, SAMPLE_TTL, () => purpleAirSample(env, s, w))
+          .then((sample) => cached(`pa-v2/${cell}`, PA_TTL, () => purpleAirReadings(env, sample)))
           .catch((e: Error) => e.message)
       : null,
   ]);
