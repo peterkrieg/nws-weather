@@ -74,12 +74,14 @@ export interface Prefs {
   charts: Item<ChartId>[];
   /** Swipeable hour-by-hour row inside the current conditions card. */
   strip: boolean;
+  /** Map style name (see BASES in MapView). */
+  basemap: string;
 }
 
 const defaults = <Id extends string>(labels: Record<Id, string>): Item<Id>[] =>
   (Object.keys(labels) as Id[]).map((id) => ({ id, on: true }));
 
-export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true });
+export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Street' });
 
 /** Keep saved order, drop ids that no longer exist, append ones added since. */
 function reconcile<Id extends string>(saved: Item<Id>[] | undefined, labels: Record<Id, string>): Item<Id>[] {
@@ -92,7 +94,17 @@ export const normalizePrefs = (p: Partial<Prefs> | null): Prefs => ({
   sections: reconcile(p?.sections, SECTIONS),
   charts: reconcile(p?.charts, CHARTS),
   strip: p?.strip ?? true,
+  // Before prefs existed the map kept its own setting.
+  basemap: p?.basemap ?? legacyBasemap() ?? 'Street',
 });
+
+function legacyBasemap(): string | null {
+  try {
+    return localStorage.getItem('wx:basemap');
+  } catch {
+    return null;
+  }
+}
 
 export const usePrefs = () => usePersisted<Prefs>('wx:prefs', defaultPrefs, normalizePrefs);
 

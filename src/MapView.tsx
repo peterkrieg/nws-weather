@@ -4,7 +4,6 @@ import { LayersControl, MapContainer, Marker, TileLayer, useMap, useMapEvents } 
 import type { Loc } from './api';
 import { AQ_LAYER, AirQualityLayer } from './AirQuality';
 
-const BASE_KEY = 'wx:basemap';
 const AQ_KEY = 'wx:aq';
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
 const TOUCH = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
@@ -13,35 +12,54 @@ const pending = L.divIcon({ className: '', html: '<div class="pin pin-pending"><
 const pin = L.divIcon({ className: '', html: '<div class="pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
 
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-const BASES = [
+const ESRI_ATTR = 'Tiles &copy; <a href="https://www.esri.com">Esri</a>';
+/** Map styles. All are free to use without a key, with attribution. */
+export const BASES = [
   {
     name: 'Street',
+    note: 'OpenStreetMap standard. Detailed, bold road colors.',
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: OSM_ATTR,
     maxNativeZoom: 19,
   },
   {
+    name: 'Trails',
+    note: 'CyclOSM. Muted roads, trails stand out.',
+    url: 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+    attribution: `${OSM_ATTR} | <a href="https://www.cyclosm.org">CyclOSM</a>`,
+    maxNativeZoom: 19,
+  },
+  {
+    name: 'Light',
+    note: 'Esri World Topo. Clean and quiet, like Google Maps terrain. No trails.',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution: `${ESRI_ATTR}, HERE, Garmin, USGS, NGA, EPA, NPS`,
+    maxNativeZoom: 19,
+  },
+  {
     name: 'Topo',
+    note: 'OpenTopoMap. Contours and hill shading, trails shown.',
     url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
     attribution: `${OSM_ATTR}, SRTM | &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)`,
     maxNativeZoom: 17,
   },
   {
     name: 'USGS Topo',
+    note: 'US only. Classic USGS quad style with trails.',
     url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
     attribution: 'USGS The National Map',
     maxNativeZoom: 16,
   },
+  {
+    name: 'Satellite',
+    note: 'Esri World Imagery.',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: `${ESRI_ATTR}, Maxar, Earthstar Geographics`,
+    maxNativeZoom: 19,
+  },
 ];
 
-function savedBase() {
-  try {
-    const name = localStorage.getItem(BASE_KEY);
-    return BASES.some((b) => b.name === name) ? name : 'Street';
-  } catch {
-    return 'Street';
-  }
-}
+const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name : 'Street');
 
 function save(key: string, value: string) {
   try {
@@ -63,10 +81,12 @@ function Controller({
   loc,
   onPick,
   onTap,
+  onBase,
 }: {
   loc: Loc | null;
   onPick: (lat: number, lon: number) => void;
   onTap: (lat: number, lon: number) => void;
+  onBase: (name: string) => void;
 }) {
   const map = useMap();
   useMapEvents({
@@ -78,13 +98,7 @@ function Controller({
     },
     overlayadd: (e) => e.name === AQ_LAYER && save(AQ_KEY, '1'),
     overlayremove: (e) => e.name === AQ_LAYER && save(AQ_KEY, '0'),
-    baselayerchange: (e) => {
-      try {
-        localStorage.setItem(BASE_KEY, e.name);
-      } catch {
-        /* ignore */
-      }
-    },
+    baselayerchange: (e) => onBase(e.name),
   });
 
   // Recenter for searches / saved locations, but leave the view alone when the user clicked the map.
@@ -180,8 +194,32 @@ function TwoFingerHint({ disabled }: { disabled: boolean }) {
   return show && !disabled ? <div className="map-two-finger">Use two fingers to move the map</div> : null;
 }
 
-export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat: number, lon: number) => void }) {
-  const base = savedBase();
+export default function MapView({
+  loc,
+  onPick,
+  basemap,
+  onBasemap,
+}: {
+  loc: Loc | null;
+  onPick: (lat: number, lon: number) => void;
+  basemap: string;
+  onBasemap: (name: string) => void;
+}) {
+  const base = validBase(basemap);
+  // The layer switch only reads `checked` when it mounts. A change made in the map's own switch is
+  // already showing, but one made in Layout settings needs the switch rebuilt.
+  const shownBase = useRef(base);
+  const [ctlKey, setCtlKey] = useState(0);
+  useEffect(() => {
+    if (base !== shownBase.current) {
+      shownBase.current = base;
+      setCtlKey((k) => k + 1);
+    }
+  }, [base]);
+  const pickBase = (name: string) => {
+    shownBase.current = name;
+    onBasemap(name);
+  };
   const aqOn = aqSaved();
   const [tapped, setTapped] = useState<{ lat: number; lon: number } | null>(null);
   const [full, setFull] = useState(false);
@@ -195,7 +233,7 @@ export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat
       worldCopyJump
       dragging={!TOUCH}
     >
-      <LayersControl position="topright">
+      <LayersControl position="topright" key={ctlKey}>
         {BASES.map((b) => (
           <LayersControl.BaseLayer key={b.name} name={b.name} checked={b.name === base}>
             {/* CORS mode so the service worker can keep viewed tiles for offline use. */}
@@ -227,7 +265,7 @@ export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat
       )}
       <TwoFingerHint disabled={full} />
       <FullScreen full={full} setFull={setFull} />
-      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} />
+      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} />
     </MapContainer>
   );
 }
