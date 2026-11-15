@@ -170,19 +170,27 @@ interface Sampled {
 }
 
 async function purpleAirSample(env: Env, s: number, w: number): Promise<Sampled[]> {
-  const { rows } = await purpleAir(env, ['latitude', 'longitude'], {
+  // Quality fields cost points too, but only on this weekly lookup.
+  const { rows } = await purpleAir(env, ['latitude', 'longitude', 'confidence', 'channel_flags'], {
     nwlat: String(s + CELL),
     nwlng: String(w),
     selat: String(s),
     selng: String(w + CELL),
   });
-  const picked = new Map<string, Sampled>();
+  // Each sensor has two laser counters. `channel_flags` is non-zero when PurpleAir has marked one
+  // as faulty; `confidence` (0–100) is how well the two agree. Skip flagged or disagreeing sensors,
+  // and in each square keep the most trustworthy one.
+  const picked = new Map<string, Sampled & { confidence: number }>();
   for (const row of rows) {
     if (row.latitude == null || row.longitude == null) continue;
+    if (row.channel_flags) continue;
+    const confidence = row.confidence ?? 0;
+    if (confidence < 90) continue;
     const k = `${Math.floor(row.latitude / SAMPLE)},${Math.floor(row.longitude / SAMPLE)}`;
-    if (!picked.has(k)) picked.set(k, { id: row.sensor_index!, lat: row.latitude, lon: row.longitude });
+    const prev = picked.get(k);
+    if (!prev || confidence > prev.confidence) picked.set(k, { id: row.sensor_index!, lat: row.latitude, lon: row.longitude, confidence });
   }
-  return [...picked.values()];
+  return [...picked.values()].map(({ id, lat, lon }) => ({ id, lat, lon }));
 }
 
 async function purpleAirReadings(env: Env, sample: Sampled[]): Promise<Sensor[]> {
@@ -222,8 +230,8 @@ async function airQuality(url: URL, env: Env) {
       ? cached(`airnow/${cell}`, READ_TTL, () => airNow(env, s, w)).catch((e: Error) => e.message)
       : null,
     env.PURPLEAIR_KEY
-      ? cached(`pa-sample-v2/${cell}`, SAMPLE_TTL, () => purpleAirSample(env, s, w))
-          .then((sample) => cached(`pa-v2/${cell}`, PA_TTL, () => purpleAirReadings(env, sample)))
+      ? cached(`pa-sample-v3/${cell}`, SAMPLE_TTL, () => purpleAirSample(env, s, w))
+          .then((sample) => cached(`pa-v3/${cell}`, PA_TTL, () => purpleAirReadings(env, sample)))
           .catch((e: Error) => e.message)
       : null,
   ]);
