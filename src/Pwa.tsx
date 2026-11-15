@@ -100,8 +100,17 @@ export function UpdatePrompt() {
     updateServiceWorker,
   } = useRegisterSW({
     onRegisteredSW(_url, reg) {
-      // Home-screen apps can stay open for days: check for a new version hourly.
-      if (reg) setInterval(() => reg.update().catch(() => {}), 3600e3);
+      if (!reg) return;
+      // Home-screen apps stay open for days, and iOS only checks for a new version on a cold
+      // launch. So also check hourly, and whenever the app comes back to the foreground.
+      let last = Date.now();
+      const check = () => {
+        if (Date.now() - last < 60e3 || !navigator.onLine) return;
+        last = Date.now();
+        reg.update().catch(() => {});
+      };
+      setInterval(check, 3600e3);
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check());
     },
   });
   if (!needRefresh) return null;
