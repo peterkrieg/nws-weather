@@ -26,11 +26,13 @@ export function Hero({
   title,
   pointElevFt,
   titleAction,
+  status,
 }: {
   wx: Weather;
   title: string;
   pointElevFt: number | null | undefined;
   titleAction?: ReactNode;
+  status?: ReactNode;
 }) {
   // undefined = still loading, null = lookup failed
   const now = wx.hours[0];
@@ -75,18 +77,12 @@ export function Hero({
         <h1 className="place">{title}</h1>
         {titleAction}
       </div>
+      {/* Phones show place and elevation only; coordinates and the source link move to the status line. */}
       <div className="place-sub">
-        {[
-          showPlace ? wx.place : null,
-          `${wx.lat.toFixed(4)}, ${wx.lon.toFixed(4)}`,
-        ]
-          .filter(Boolean)
-          .join(' · ')}{' '}
-        ·{' '}
-        <a href={sourceUrl} target="_blank" rel="noopener">
-          {wx.source === 'nws' ? 'weather.gov' : wx.source === 'openmeteo' ? 'Open-Meteo forecast' : 'MET Norway forecast'}
-        </a>{' '}
-        ·{' '}
+        {showPlace && <span>{wx.place} · </span>}
+        <span className="wide-only">
+          {wx.lat.toFixed(4)}, {wx.lon.toFixed(4)} ·{' '}
+        </span>
         <span className="elev">
           Elevation{' '}
           {pointElevFt === undefined ? (
@@ -96,6 +92,15 @@ export function Hero({
           ) : (
             ft(pointElevFt)
           )}
+        </span>
+      </div>
+      <div className="place-status">
+        {status}
+        <span>
+          {' · '}
+          <a href={sourceUrl} target="_blank" rel="noopener">
+            {wx.source === 'nws' ? 'weather.gov' : wx.source === 'openmeteo' ? 'Open-Meteo' : 'MET Norway'}
+          </a>
         </span>
       </div>
 

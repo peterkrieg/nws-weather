@@ -54,7 +54,8 @@ a { color: var(--s1); }
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
-  padding: 10px 16px;
+  /* Clear the notch / status bar and rounded corners when running full-screen from the home screen. */
+  padding: calc(10px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 10px calc(16px + env(safe-area-inset-left));
 }
 .top-inner { max-width: 1180px; margin: 0 auto; display: flex; align-items: center; gap: 16px; }
 .brand { font-weight: 650; font-size: 17px; color: var(--ink); text-decoration: none; white-space: nowrap; }
@@ -74,7 +75,7 @@ a { color: var(--s1); }
 main {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px calc(16px + env(safe-area-inset-right)) 16px calc(16px + env(safe-area-inset-left));
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr);
@@ -111,7 +112,64 @@ h2 { font-size: 18px; font-weight: 650; margin: 4px 2px 10px; }
 .place-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .place { font-size: 22px; font-weight: 650; line-height: 1.2; }
 .place-sub { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
-.place-sub a { color: inherit; }
+.place-sub a, .place-status a { color: inherit; }
+.place-status { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; }
+.updated { display: inline-flex; align-items: center; gap: 2px; }
+.updated.is-offline { color: var(--alert-ink); font-weight: 600; }
+.refresh-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: -6px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.refresh-btn .ico { width: 14px; height: 14px; }
+.refresh-btn:hover { background: var(--wash); }
+@media (max-width: 600px) { .wide-only { display: none; } }
+
+/* ---------- app shell: pull to refresh, update toast, safe areas ---------- */
+html, body { overscroll-behavior-y: contain; }
+.ptr {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 64px);
+  left: 50%;
+  z-index: 1200;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  transform: translate(-50%, -44px);
+  pointer-events: none;
+}
+.ptr.is-ready { color: var(--s1); }
+.update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--ink);
+  color: var(--page);
+  padding: 8px 8px 8px 14px;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.update-x { background: none; border: 0; color: inherit; opacity: 0.7; cursor: pointer; font-size: 14px; padding: 4px 6px; }
 .now { display: flex; align-items: center; gap: 14px; margin: 16px 0 14px; }
 .now-emoji { font-size: 52px; line-height: 1; }
 .now-temp { font-size: 64px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
@@ -377,7 +435,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); 
 th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
 tr.newday td { border-top: 2px solid var(--axis); }
 
-footer { max-width: 1180px; margin: 0 auto; padding: 8px 24px 32px; color: var(--muted); font-size: 12px; }
+footer { max-width: 1180px; margin: 0 auto; padding: 8px calc(24px + env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left)); color: var(--muted); font-size: 12px; }
 footer a { color: inherit; }
 
 /* Elevation placeholder: as wide as a five-digit value ("14,505 ft") so the real number never shifts the line. */

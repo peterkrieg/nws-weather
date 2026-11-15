@@ -109,3 +109,35 @@ export const samePlace = (a: { lat: number; lon: number }, b: { lat: number; lon
 
 export const useFavorites = () =>
   usePersisted<Favorite[]>('wx:favorites', () => [], (v) => (Array.isArray(v) ? v.filter((f) => f && Number.isFinite(f.lat)) : []));
+
+// ---- Saved forecasts ----------------------------------------------------------------------------
+// The last few forecasts, so the app opens instantly and still shows something with no signal.
+
+import type { Weather } from './api';
+
+interface SavedForecast {
+  lat: number;
+  lon: number;
+  at: number;
+  wx: Weather;
+}
+const FORECASTS_KEY = 'wx:forecasts';
+const KEEP = 10;
+
+export function savedForecast(p: { lat: number; lon: number }): SavedForecast | undefined {
+  return readJson<SavedForecast[]>(FORECASTS_KEY, []).find((f) => samePlace(f, p));
+}
+
+export function saveForecast(p: { lat: number; lon: number }, wx: Weather, at = Date.now()) {
+  const rest = readJson<SavedForecast[]>(FORECASTS_KEY, []).filter((f) => !samePlace(f, p));
+  const next = [{ lat: p.lat, lon: p.lon, at, wx }, ...rest].slice(0, KEEP);
+  // Forecasts are ~50–100 KB each; if storage is full, keep fewer rather than none.
+  for (let n = next.length; n > 0; n--) {
+    try {
+      localStorage.setItem(FORECASTS_KEY, JSON.stringify(next.slice(0, n)));
+      return;
+    } catch {
+      /* try with fewer */
+    }
+  }
+}

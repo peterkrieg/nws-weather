@@ -149,7 +149,8 @@ export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat
       <LayersControl position="topright">
         {BASES.map((b) => (
           <LayersControl.BaseLayer key={b.name} name={b.name} checked={b.name === base}>
-            <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} />
+            {/* CORS mode so the service worker can keep viewed tiles for offline use. */}
+            <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} crossOrigin="anonymous" />
           </LayersControl.BaseLayer>
         ))}
         <LayersControl.Overlay name={AQ_LAYER} checked={aqOn}>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActionIcon, Loader } from '@mantine/core';
 import { fetchElevation, fetchWeather, type Loc, type Place, type Weather } from './api';
 import SearchBox from './SearchBox';
@@ -7,10 +7,19 @@ import { Alerts, Daily, Hero } from './Forecast';
 import Hourly from './Hourly';
 import Settings from './Settings';
 import { FavoriteEditor, FavoritesBar, FavoriteStar } from './Favorites';
-import { readJson, samePlace, useFavorites, usePrefs, writeJson, type Favorite, type SectionId } from './store';
+import { readJson, samePlace, savedForecast, saveForecast, useFavorites, usePrefs, writeJson, type Favorite, type SectionId } from './store';
+import { usePullToRefresh, Updated, UpdatePrompt } from './Pwa';
 
 const LAST_KEY = 'wx:last';
 const TOUCH = window.matchMedia('(pointer: coarse)').matches;
+const STALE_MS = 15 * 60e3;
+
+/** Drop hours already past from a saved forecast so "now" is right. */
+function trimPast(wx: Weather): Weather {
+  const cutoff = Date.now() - 3600e3;
+  const hours = wx.hours.filter((h) => h.t >= cutoff);
+  return { ...wx, hours: hours.length ? hours : wx.hours };
+}
 const RECENTS_KEY = 'wx:recents';
 
 /** URL hash is "#lat,lon" or "#lat,lon,Label" so a location can be bookmarked or shared. */
@@ -40,28 +49,71 @@ export default function App() {
   const [favorites, setFavorites] = useFavorites();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<Favorite | null>(null);
+  const [fetchedAt, setFetchedAt] = useState(0);
+  const [offline, setOffline] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const wxPlaceRef = useRef<{ lat: number; lon: number } | null>(null);
+  const fetchedAtRef = useRef(0);
+  fetchedAtRef.current = fetchedAt;
 
+  // Elevation and the URL follow the location.
   useEffect(() => {
     if (!loc) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     const hash = [loc.lat.toFixed(4), loc.lon.toFixed(4), ...(loc.label ? [encodeURIComponent(loc.label)] : [])].join(',');
     history.replaceState(null, '', `#${hash}`);
     setPointElevFt(undefined);
     fetchElevation(loc.lat, loc.lon).then((ft) => {
       if (!cancelled) setPointElevFt(ft);
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [loc]);
+
+  // The forecast follows the location and manual/automatic refreshes.
+  useEffect(() => {
+    if (!loc) return;
+    let cancelled = false;
+    // Show the saved copy straight away (instant launch, or the only thing available offline).
+    const saved = savedForecast(loc);
+    if (saved && !samePlace(wxPlaceRef.current ?? { lat: NaN, lon: NaN }, loc)) {
+      setWx(trimPast(saved.wx));
+      setFetchedAt(saved.at);
+      wxPlaceRef.current = loc;
+    }
+    if (!navigator.onLine) {
+      // No point waiting out retries: say so now, and try again when the connection comes back.
+      if (saved) setOffline(true);
+      else {
+        setWx(null);
+        wxPlaceRef.current = null;
+        setError('You are offline and there is no saved forecast for this spot.');
+      }
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setOffline(false);
     fetchWeather(loc.lat, loc.lon)
       .then((w) => {
         if (cancelled) return;
         setWx(w);
+        setFetchedAt(Date.now());
+        wxPlaceRef.current = loc;
+        saveForecast(loc, w);
         writeJson(LAST_KEY, { lat: loc.lat, lon: loc.lon, label: loc.label });
       })
       .catch((e: Error) => {
         if (cancelled) return;
-        setWx(null);
-        setError(e.message);
+        if (wxPlaceRef.current && samePlace(wxPlaceRef.current, loc)) {
+          setOffline(true); // keep showing the saved forecast, flagged as old
+        } else {
+          setWx(null);
+          wxPlaceRef.current = null;
+          setError(navigator.onLine ? e.message : 'You are offline and there is no saved forecast for this spot.');
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -69,7 +121,24 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loc]);
+  }, [loc, refreshKey]);
+
+  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+  // Coming back to the app after a while (phone unlocked, app switched to): refresh if stale.
+  useEffect(() => {
+    const onShow = () => {
+      if (document.visibilityState === 'visible' && Date.now() - fetchedAtRef.current > STALE_MS) refresh();
+    };
+    document.addEventListener('visibilitychange', onShow);
+    window.addEventListener('online', refresh); // signal is back: replace the saved copy
+    return () => {
+      document.removeEventListener('visibilitychange', onShow);
+      window.removeEventListener('online', refresh);
+    };
+  }, [refresh]);
+
+  usePullToRefresh(refresh);
 
   // Follow hash changes made outside the app (pasting a link into the address bar, back/forward).
   useEffect(() => {
@@ -164,6 +233,7 @@ export default function App() {
             wx={wx}
             title={title}
             pointElevFt={loading ? undefined : pointElevFt}
+            status={<Updated at={fetchedAt} offline={offline} loading={loading} onRefresh={refresh} />}
             titleAction={<FavoriteStar fav={currentFav} onAdd={addFavorite} onEdit={() => currentFav && setEditing(currentFav)} />}
           />
         )}
@@ -220,6 +290,7 @@ export default function App() {
         {shown.map((id) => sectionEls[id])}
       </main>
 
+      <UpdatePrompt />
       <Settings opened={settingsOpen} onClose={() => setSettingsOpen(false)} prefs={prefs} setPrefs={setPrefs} />
       <FavoriteEditor
         fav={editing}
