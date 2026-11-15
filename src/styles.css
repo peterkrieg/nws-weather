@@ -65,6 +65,7 @@ a { color: var(--s1); }
 .ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .s-main { font-weight: 550; }
 .s-sub { color: var(--ink-2); font-size: 13px; }
+.s-geo { display: flex; align-items: center; gap: 8px; color: var(--s1); }
 .s-head { color: var(--muted); font-size: 12px; padding: 4px 10px 2px; }
 @media (max-width: 520px) {
   .brand { display: none; }
@@ -131,6 +132,12 @@ h2 { font-size: 18px; font-weight: 650; margin: 4px 2px 10px; }
   cursor: pointer;
 }
 .refresh-btn .ico { width: 14px; height: 14px; }
+@media (pointer: coarse) {
+  [aria-label="Layout settings"], .place-row .mantine-ActionIcon-root { min-width: 44px; min-height: 44px; }
+  .place-row .mantine-ActionIcon-root { margin: -6px -10px 0 0; }
+  .refresh-btn { width: 36px; height: 36px; margin: -10px -4px; }
+  .hourly-head .mantine-SegmentedControl-label { padding: 6px 12px; font-size: 13px; }
+}
 .refresh-btn:hover { background: var(--wash); }
 @media (max-width: 600px) { .wide-only { display: none; } }
 
@@ -268,6 +275,43 @@ html, body { overscroll-behavior-y: contain; }
 }
 .leaflet-container { font: inherit; font-size: 12px; cursor: crosshair; }
 .pin-pending { background: #fff; border-color: #2a78d6; }
+.map-full-btn {
+  position: absolute;
+  left: 10px;
+  top: 104px; /* under the zoom buttons */
+  z-index: 1000;
+  min-width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  background: #fff;
+  color: #222;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+  background-clip: padding-box;
+}
+.map-full-btn.is-full { top: calc(10px + env(safe-area-inset-top)); left: auto; right: calc(60px + env(safe-area-inset-right)); }
+body.map-full { overflow: hidden; }
+body.map-full .sec-map {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  border-radius: 0;
+  border: 0;
+}
+body.map-full .sec-map .map { min-height: 0; }
+body.map-full .map-hint { bottom: calc(22px + env(safe-area-inset-bottom)); }
+body.map-full .leaflet-top { top: env(safe-area-inset-top); }
+body.map-full .map-confirm { top: calc(60px + env(safe-area-inset-top)); }
+body.map-full .aq-legend { bottom: calc(44px + env(safe-area-inset-bottom)); }
+/* Finger-sized map controls on touch screens. */
+.leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; font-size: 20px; }
+.leaflet-touch .leaflet-control-layers-toggle { width: 44px; height: 44px; }
 .map-two-finger {
   position: absolute;
   inset: 0;

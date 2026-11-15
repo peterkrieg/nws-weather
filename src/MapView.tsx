@@ -102,13 +102,61 @@ function Controller({
   return null;
 }
 
+/**
+ * Full-screen toggle. While full screen, one finger moves the map (there's no page to scroll),
+ * and the phone's back gesture or Esc closes it.
+ */
+function FullScreen({ full, setFull }: { full: boolean; setFull: (v: boolean) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    document.body.classList.toggle('map-full', full);
+    if (TOUCH) {
+      if (full) map.dragging.enable();
+      else map.dragging.disable();
+    }
+    setTimeout(() => map.invalidateSize(), 0);
+    if (!full) return;
+    history.pushState({ mapFull: true }, '');
+    const onPop = () => setFull(false);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setFull(false);
+    addEventListener('popstate', onPop);
+    addEventListener('keydown', onKey);
+    return () => {
+      removeEventListener('popstate', onPop);
+      removeEventListener('keydown', onKey);
+      // Closed by the button rather than by Back: drop the history entry we added.
+      if (history.state?.mapFull) history.back();
+    };
+  }, [full, map, setFull]);
+  return (
+    <button
+      type="button"
+      className={full ? 'map-full-btn is-full' : 'map-full-btn'}
+      onClick={() => setFull(!full)}
+      ref={(el) => {
+        if (el) L.DomEvent.disableClickPropagation(el);
+      }}
+      aria-label={full ? 'Exit full screen' : 'Full screen map'}
+      title={full ? 'Exit full screen' : 'Full screen map'}
+    >
+      {full ? (
+        'Done'
+      ) : (
+        <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 /** Shows "Use two fingers to move the map" when someone drags the map with one finger. */
-function TwoFingerHint() {
+function TwoFingerHint({ disabled }: { disabled: boolean }) {
   const map = useMap();
   const [show, setShow] = useState(false);
   const timer = useRef<number>(0);
   useEffect(() => {
-    if (!TOUCH) return;
+    if (!TOUCH || disabled) return;
     const el = map.getContainer();
     let start: { x: number; y: number } | null = null;
     const down = (e: TouchEvent) => {
@@ -128,14 +176,15 @@ function TwoFingerHint() {
       el.removeEventListener('touchstart', down);
       el.removeEventListener('touchmove', move);
     };
-  }, [map]);
-  return show ? <div className="map-two-finger">Use two fingers to move the map</div> : null;
+  }, [map, disabled]);
+  return show && !disabled ? <div className="map-two-finger">Use two fingers to move the map</div> : null;
 }
 
 export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat: number, lon: number) => void }) {
   const base = savedBase();
   const aqOn = aqSaved();
   const [tapped, setTapped] = useState<{ lat: number; lon: number } | null>(null);
+  const [full, setFull] = useState(false);
   useEffect(() => setTapped(null), [loc]);
   return (
     <MapContainer
@@ -161,7 +210,14 @@ export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat
       {tapped && <Marker position={[tapped.lat, tapped.lon]} icon={pending} interactive={false} />}
       {tapped && (
         <div className="map-confirm" ref={(el) => { if (el) L.DomEvent.disableClickPropagation(el); }}>
-          <button type="button" className="map-confirm-go" onClick={() => onPick(tapped.lat, tapped.lon)}>
+          <button
+            type="button"
+            className="map-confirm-go"
+            onClick={() => {
+              onPick(tapped.lat, tapped.lon);
+              setFull(false); // back to the forecast for the spot just picked
+            }}
+          >
             Show forecast here
           </button>
           <button type="button" className="map-confirm-x" onClick={() => setTapped(null)} aria-label="Cancel">
@@ -169,7 +225,8 @@ export default function MapView({ loc, onPick }: { loc: Loc | null; onPick: (lat
           </button>
         </div>
       )}
-      <TwoFingerHint />
+      <TwoFingerHint disabled={full} />
+      <FullScreen full={full} setFull={setFull} />
       <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} />
     </MapContainer>
   );

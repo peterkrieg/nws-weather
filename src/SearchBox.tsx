@@ -70,6 +70,10 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
 
   const submit = (key: string) => {
     combobox.closeDropdown();
+    if (key === 'geo') {
+      locate();
+      return;
+    }
     if (key.startsWith('fav:')) {
       const f = favorites.find((x) => x.id === key.slice(4));
       if (f) {
@@ -102,7 +106,8 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
   const q = query.toLowerCase();
   // Favorites lead the list: all of them on an empty box, matching names as you type.
   const favMatches = coords ? [] : favorites.filter((f) => !q || f.label.toLowerCase().includes(q)).slice(0, 8);
-  const hasDropdown = Boolean(coords) || list.length > 0 || favMatches.length > 0 || Boolean(note);
+  const offerGeo = !query && 'geolocation' in navigator;
+  const hasDropdown = offerGeo || Boolean(coords) || list.length > 0 || favMatches.length > 0 || Boolean(note);
 
   return (
     <div className="search">
@@ -143,7 +148,7 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
               )
             }
             rightSection={
-              <ActionIcon variant="subtle" color="gray" onClick={locate} aria-label="Use my location" title="Use my location">
+              <ActionIcon variant="subtle" color="gray" size="lg" onClick={locate} aria-label="Use my location" title="Use my location">
                 <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="12" cy="12" r="3.5" />
                   <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
@@ -158,6 +163,17 @@ export default function SearchBox({ onPickPlace, onPickPoint, recents, bias, cle
               <Combobox.Option value="coords">
                 <div className="s-main">
                   Forecast for {coords[1]}, {coords[2]}
+                </div>
+              </Combobox.Option>
+            )}
+            {offerGeo && (
+              <Combobox.Option value="geo">
+                <div className="s-main s-geo">
+                  <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3.5" />
+                    <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+                  </svg>
+                  Use my current location
                 </div>
               </Combobox.Option>
             )}
