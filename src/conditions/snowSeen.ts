@@ -11,6 +11,9 @@ export interface Scene {
   transform: number[];
   shape: [number, number];
   href: string;
+  /** True colour, 10 m (only from the area lookup the satellite map uses). */
+  tci?: { href: string; transform: number[]; shape: [number, number] };
+  bbox?: number[];
 }
 export interface Seen {
   snow: boolean;

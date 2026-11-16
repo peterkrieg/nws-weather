@@ -19,19 +19,41 @@ export const REPORT_STATES = [
 export const REPORT_LABEL: Record<string, string> = Object.fromEntries(REPORT_STATES.map(([id, label]) => [id, label]));
 export const REPORT_COLOR: Record<string, string> = Object.fromEntries(REPORT_STATES.map(([id, , c]) => [id, c]));
 
-const WHEN = [
-  ['0', 'Just now'],
-  ['1', '1 h ago'],
-  ['3', '3 h ago'],
-  ['morning', 'This morning'],
-] as const;
+/**
+ * Time choices, worked out when the popup opens: the last few hours, then up to two named parts of
+ * the day that are already a while back (at 7 am that's "Last evening", not "This morning").
+ * Values are unix seconds.
+ */
+export function whenChoices(nowMs = Date.now()): [number, string][] {
+  const now = Math.floor(nowMs / 1000);
+  const out: [number, string][] = [
+    [now, 'Just now'],
+    [now - 3600, '1 h ago'],
+    [now - 3 * 3600, '3 h ago'],
+  ];
+  const at = (daysBack: number, h: number, m = 0) => {
+    const d = new Date(nowMs);
+    d.setDate(d.getDate() - daysBack);
+    d.setHours(h, m, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  };
+  const named: [number, string][] = [
+    [at(0, 15), 'This afternoon'],
+    [at(0, 9), 'This morning'],
+    [at(1, 18), new Date(nowMs).getHours() < 12 ? 'Last evening' : 'Yesterday evening'],
+    [at(1, 15), 'Yesterday afternoon'],
+  ];
+  // More than 4 h back (so it isn't just "3 h ago" again) and within the last day.
+  out.push(...named.filter(([t]) => t <= now - 4 * 3600 && t >= now - 22 * 3600).slice(0, 2));
+  return out;
+}
 
 export function reportHtml() {
   return `
     <div class="rep">
       <div class="rep-q">How was it?</div>
       <div class="rep-when" role="radiogroup" aria-label="When">
-        ${WHEN.map(([v, l], i) => `<button type="button" data-when="${v}" class="${i === 0 ? 'on' : ''}" aria-pressed="${i === 0}">${l}</button>`).join('')}
+        ${whenChoices().map(([v, l], i) => `<button type="button" data-when="${i === 0 ? 'now' : v}" class="${i === 0 ? 'on' : ''}" aria-pressed="${i === 0}">${l}</button>`).join('')}
       </div>
       <div class="rep-states">
         ${REPORT_STATES.map(([id, label, c]) => `<button type="button" data-state="${id}"><i style="background:${c}"></i>${label}</button>`).join('')}
@@ -41,22 +63,12 @@ export function reportHtml() {
     </div>`;
 }
 
-function observedAt(when: string) {
-  const now = Date.now() / 1000;
-  if (when === 'morning') {
-    const d = new Date();
-    d.setHours(9, 0, 0, 0);
-    return Math.min(now, d.getTime() / 1000);
-  }
-  return now - Number(when) * 3600;
-}
-
 /** Wire up the form in a just-opened popup. */
 export function wireReport(root: HTMLElement, tap: { lat: number; lon: number }, stretch: Stretch, cond: Pick<TrailConditions, 'probe'>) {
   const box = root.querySelector<HTMLElement>('.rep');
   if (!box) return;
   const msg = box.querySelector<HTMLElement>('.rep-msg')!;
-  let when = '0';
+  let when = 'now';
   box.addEventListener('click', async (e) => {
     const btn = (e.target as HTMLElement).closest('button');
     if (!btn) return;
@@ -80,7 +92,7 @@ export function wireReport(root: HTMLElement, tap: { lat: number; lon: number },
     states.classList.add('busy');
     msg.textContent = 'Saving…';
     try {
-      const at = observedAt(when);
+      const at = when === 'now' ? Date.now() / 1000 : Number(when);
       const p = await cond.probe(tap.lat, tap.lon, stretch, Math.floor(at));
       const extent = box.querySelector<HTMLInputElement>('[data-extent]')!.checked ? 'stretch' : 'spot';
       const { id } = (await reportsApi('', {

@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react';
-import type { ChartId, Item } from './store';
+import { usePersisted, type ChartId, type Item } from './store';
 import { SegmentedControl } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import {
@@ -330,7 +330,8 @@ export default function Hourly({ hours, lat, lon, source, charts }: Props) {
   // Phones get one chart at a time behind tabs instead of a long stack.
   const phone = useMediaQuery('(max-width: 600px)') ?? false;
   const [tab, setTab] = useState<ChartId>('temp');
-  const [range, setRange] = useState('48');
+  // Remembered on this device.
+  const [range, setRange] = usePersisted('wx:hourlyRange', () => '48', (v) => (['24', '48', '168'].includes(v) ? v : '48'));
   const [tableOpen, setTableOpen] = useState(false);
   const hrs = Number(range);
   const frame = useFrame(hours, hrs, lat, lon);

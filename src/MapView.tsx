@@ -11,6 +11,8 @@ import type { MapPos } from './urlState';
 import type { TrailConditions } from './conditions/client';
 import { nearbyReportsHtml, reportHtml, wireReport } from './reportForm';
 import ReportsLayer from './ReportsLayer';
+import SatelliteDate from './SatelliteDate';
+import { SentinelLayer, type SatLayer, type SatStatus } from './sentinel';
 
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
 const TOUCH = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
@@ -28,6 +30,8 @@ export const BASES: {
   attribution: string;
   maxNativeZoom: number;
   vector?: boolean;
+  /** Drawn in the browser from recent Sentinel-2 passes (see sentinel.ts). */
+  sentinel?: boolean;
 }[] = [
   {
     name: 'Outdoors',
@@ -66,8 +70,16 @@ export const BASES: {
     maxNativeZoom: 16,
   },
   {
+    name: 'Recent satellite',
+    note: 'Sentinel-2, newest cloud-free pass (every 2–5 days). Shows snow and melt-out; too coarse (10 m) for trails.',
+    url: '',
+    attribution: 'Contains modified <a href="https://dataspace.copernicus.eu">Copernicus Sentinel</a> data',
+    maxNativeZoom: 18,
+    sentinel: true,
+  },
+  {
     name: 'Satellite',
-    note: 'Esri World Imagery.',
+    note: 'Esri World Imagery. Sharp, but often a year or more old.',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     attribution: `${ESRI_ATTR}, Maxar, Earthstar Geographics`,
     maxNativeZoom: 19,
@@ -151,6 +163,14 @@ const VectorLayer = createLayerComponent<Lazy, VectorProps>(
     if (props.ratings !== prev.ratings) layer.setRatings(props.ratings);
     if (props.conditions !== prev.conditions) layer.setConditions(props.conditions);
     layer.onCond = props.onConditions;
+  },
+);
+
+const SatelliteLayer = createLayerComponent<SatLayer, { attribution: string; onStatus: (s: SatStatus) => void; until: number | null }>(
+  (props, ctx) => createElementObject(new SentinelLayer(props.attribution, props.onStatus), ctx),
+  (layer, props) => {
+    layer.onStatus = props.onStatus;
+    layer.setUntil(props.until);
   },
 );
 
@@ -390,6 +410,8 @@ export default function MapView({
   const [condStatus, setCondStatus] = useState<ConditionsStatus>({ state: 'off' });
   const [tapped, setTapped] = useState<{ lat: number; lon: number } | null>(null);
   const [full, setFull] = useState(false);
+  const [sat, setSat] = useState<SatStatus | null>(null);
+  const [satUntil, setSatUntil] = useState<number | null>(null);
   useEffect(() => setTapped(null), [loc]);
   return (
     <MapContainer
@@ -406,6 +428,8 @@ export default function MapView({
             {/* CORS mode so the service worker can keep viewed tiles for offline use. */}
             {b.vector ? (
               <VectorLayer ref={vector} attribution={b.attribution} ratings={mtbRatings} conditions={conditions} onConditions={setCondStatus} />
+            ) : b.sentinel ? (
+              <SatelliteLayer attribution={b.attribution} onStatus={setSat} until={satUntil} />
             ) : (
               <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} crossOrigin="anonymous" />
             )}
@@ -425,6 +449,7 @@ export default function MapView({
           </LayersControl.Overlay>
         )}
       </LayersControl>
+      {base === 'Recent satellite' && sat && <SatelliteDate status={sat} onUntil={setSatUntil} />}
       {base === 'Outdoors' && <MtbLegend ratings={mtbRatings} conditions={condStatus} />}
       {loc && <Marker position={[loc.lat, loc.lon]} icon={pin} interactive={false} />}
       {tapped && <Marker position={[tapped.lat, tapped.lon]} icon={pending} interactive={false} />}
