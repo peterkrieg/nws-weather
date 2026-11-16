@@ -32,7 +32,7 @@ export interface Stretch {
 }
 
 export type RunReply =
-  | { id: number; ok: true; stretches: Stretch[]; samples: number; ms: number; loadMs: number }
+  | { id: number; ok: true; stretches: Stretch[]; samples: number; missing: number; ms: number; loadMs: number }
   | { id: number; ok: false; error: string };
 
 const STEP = 5; // metres between samples
@@ -93,6 +93,7 @@ async function run(req: RunRequest): Promise<RunReply> {
   const seen = new Set<string>(); // map tiles repeat lines along their edges: sample each spot once
   const stretches: Stretch[] = [];
   let count = 0;
+  let missing = 0; // samples skipped because their elevation tile didn't load
   for (const trail of req.trails) {
     const pts = sampleLine(trail.coords);
     let cur: Stretch | null = null;
@@ -113,7 +114,10 @@ async function run(req: RunRequest): Promise<RunReply> {
       let terrain = terrainCache.get(key);
       if (terrain === undefined) {
         terrain = pointTerrain(dem, p.lat, p.lon, p.dir);
-        terrainCache.set(key, terrain);
+        // Only remember "no terrain" when the elevation tile actually loaded; a tile that failed
+        // to download should be tried again on the next run.
+        if (terrain || dem.hasTile(p.lat, p.lon)) terrainCache.set(key, terrain);
+        else missing++;
       }
       if (!terrain) {
         flush();
@@ -141,7 +145,7 @@ async function run(req: RunRequest): Promise<RunReply> {
   // Drop sub-5 m flickers of a milder state between two worse stretches? Keep everything: a single
   // muddy 5 m spot is exactly what this is for. Sort so the worst draws on top.
   stretches.sort((a, b) => RANK[a.state] - RANK[b.state]);
-  return { id: req.id, ok: true, stretches, samples: count, ms: Math.round(performance.now() - t0), loadMs };
+  return { id: req.id, ok: true, stretches, samples: count, missing, ms: Math.round(performance.now() - t0), loadMs };
 }
 
 self.onmessage = (e: MessageEvent<RunRequest>) => {

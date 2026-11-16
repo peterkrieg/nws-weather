@@ -114,6 +114,7 @@ export class TrailConditions {
   private worker: Worker | null = null;
   private enabled = false;
   private runId = 0;
+  private retries = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stretches: Stretch[] = [];
   private wxCache = new Map<string, { at: number; wx: Weather & { now: number } }>();
@@ -122,9 +123,14 @@ export class TrailConditions {
     private map: MlMap,
     private onStatus: (s: Status) => void,
   ) {
-    map.on('moveend', this.schedule);
+    map.on('moveend', this.onMove);
     map.on('sourcedata', this.onSourceData);
   }
+
+  private onMove = () => {
+    this.retries = 0;
+    this.schedule();
+  };
 
   private onSourceData = (e: { sourceId?: string; isSourceLoaded?: boolean }) => {
     // New trail tiles arrived: re-run once they've settled.
@@ -140,7 +146,7 @@ export class TrailConditions {
   }
 
   destroy() {
-    this.map.off('moveend', this.schedule);
+    this.map.off('moveend', this.onMove);
     this.map.off('sourcedata', this.onSourceData);
     this.worker?.terminate();
     this.worker = null;
@@ -214,6 +220,15 @@ export class TrailConditions {
       });
       if (id !== this.runId || !this.enabled) return; // superseded
       if (!reply.ok) throw new Error(reply.error);
+      // Some elevation tiles didn't arrive (USGS is slow to render a new area): try again shortly.
+      if (reply.missing) {
+        if (this.retries < 6) {
+          this.retries++;
+          if (this.timer) clearTimeout(this.timer);
+          this.timer = setTimeout(() => void this.run(), 3000 * this.retries);
+        } else if (!reply.samples) throw new Error('Elevation data didn’t load; pan or zoom to retry');
+        if (!reply.samples) return; // still "Checking trails…"
+      } else this.retries = 0;
       if (!reply.samples) {
         this.clear();
         this.onStatus({ state: 'unsupported', message: 'Trail conditions need US elevation data' });

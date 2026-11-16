@@ -63,7 +63,9 @@ export class Dem {
         if (this.tiles.has(k)) continue;
         this.tiles.set(k, null);
         jobs.push(
+          // USGS renders tiles on demand and the first request for an area can fail: one retry.
           this.fetcher(x, y, z)
+            .catch(() => new Promise((ok) => setTimeout(ok, 1500)).then(() => this.fetcher(x, y, z)))
             .then(readFloatTiff)
             .then((r) => {
               const bounds = tileBoundsMerc(x, y, z);
@@ -74,6 +76,12 @@ export class Dem {
       }
     }
     await Promise.all(jobs);
+  }
+
+  /** Whether the tile under this point has loaded (so a NaN there means genuinely no data). */
+  hasTile(lat: number, lon: number, z = FINE_Z) {
+    const t = tileXY(lat, lon, z);
+    return !!this.tiles.get(this.key(Math.floor(t.x), Math.floor(t.y), z));
   }
 
   /** Bilinear elevation in metres, or NaN where there's no data. */
