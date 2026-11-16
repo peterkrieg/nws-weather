@@ -1,5 +1,6 @@
-import type { CSSProperties } from 'react';
-import { Button, Modal, Switch } from '@mantine/core';
+import { useState, type CSSProperties } from 'react';
+import { Button, Modal, PasswordInput, Switch } from '@mantine/core';
+import { reporterKey, setReporterKey } from './reporter';
 import {
   DndContext,
   KeyboardSensor,
@@ -175,6 +176,7 @@ export default function Settings({
       )}
       <h3 className="set-head">Hourly charts</h3>
       <OrderList items={prefs.charts} labels={CHARTS} onChange={(charts) => setPrefs({ ...prefs, charts })} />
+      <ReporterKey />
       <div className="set-foot">
         <Button variant="subtle" color="gray" size="xs" onClick={() => setPrefs(defaultPrefs())}>
           Reset to default
@@ -182,5 +184,38 @@ export default function Settings({
         <span className="set-note">Saved in this browser.</span>
       </div>
     </Modal>
+  );
+}
+
+/** Paste the reporter key here: an app installed to the home screen doesn't share Safari's storage,
+ * so the setup link opened in the browser doesn't reach it. */
+function ReporterKey() {
+  const [value, setValue] = useState(() => reporterKey() ?? '');
+  const [saved, setSaved] = useState(false);
+  return (
+    <div className="set-reporter">
+      <h3 className="set-head">Trail reports</h3>
+      <PasswordInput
+        size="xs"
+        label="Reporter key"
+        description="Lets you add “How was it?” reports and see recent ones. Reload after saving."
+        value={value}
+        onChange={(e) => {
+          setValue(e.currentTarget.value);
+          setSaved(false);
+        }}
+      />
+      <Button
+        size="xs"
+        variant="light"
+        mt={6}
+        onClick={() => {
+          setReporterKey(value);
+          setSaved(true);
+        }}
+      >
+        {saved ? 'Saved' : 'Save key'}
+      </Button>
+    </div>
   );
 }

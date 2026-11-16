@@ -19,6 +19,15 @@ export function reporterKey(): string | null {
   }
 }
 
+export function setReporterKey(k: string) {
+  try {
+    if (k.trim()) localStorage.setItem(KEY, k.trim());
+    else localStorage.removeItem(KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export const REPORTS_CHANGED = 'wx:reports-changed';
 
 export async function reportsApi(query: string, init: RequestInit = {}) {
