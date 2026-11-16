@@ -7,8 +7,10 @@ import type { ConditionsStatus } from './vectorMap';
 const COND_KEYS = [
   { label: 'Muddy', color: '#8a4b14' },
   { label: 'Damp, soft spots', color: '#d9a21b' },
-  { label: 'Frozen', color: '#4dabf7' },
-  { label: 'Snow', color: '#a5d8ff' },
+  { label: 'Icy', color: '#15aabf' },
+  { label: 'Frozen firm', color: '#1c7ed6' },
+  { label: 'Packed snow', color: '#9775fa' },
+  { label: 'Soft snow', color: '#a5d8ff' },
 ];
 
 function condLine(s: ConditionsStatus) {
@@ -17,7 +19,9 @@ function condLine(s: ConditionsStatus) {
       return 'Checking trails…';
     case 'ready': {
       const t = s.at ? new Date(s.at * 1000).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase() : '';
-      const mud = s.muddyM ? `${s.muddyM >= 1609 ? `${(s.muddyM / 1609).toFixed(1)} mi` : `${Math.round((s.muddyM * 3.28) / 10) * 10} ft`} muddy in view` : 'No mud in view';
+      const dist = (m: number) => (m >= 1609 ? `${(m / 1609).toFixed(1)} mi` : `${Math.round((m * 3.28) / 10) * 10} ft`);
+      const parts = [s.muddyM ? `${dist(s.muddyM)} muddy` : '', s.icyM ? `${dist(s.icyM)} icy` : ''].filter(Boolean);
+      const mud = parts.length ? `${parts.join(', ')} in view` : 'No mud or ice in view';
       return `${mud} · as of ${t}`;
     }
     case 'zoom':

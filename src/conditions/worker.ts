@@ -7,6 +7,7 @@ import { distM } from './geo';
 import { CanopyMap, SoilMap } from './landcover';
 import { simulate, type Result, type State, type Weather } from './model';
 import { COARSE_Z, Dem, FINE_Z, pointTerrain, type PointTerrain } from './terrain';
+import { SnowSeen } from './snowSeen';
 
 export interface TrailIn {
   coords: [number, number][]; // [lon, lat]
@@ -63,6 +64,7 @@ const dem = new Dem(async (x, y, z) => {
   return r.arrayBuffer();
 });
 const soil = new SoilMap();
+const snowSeen = new SnowSeen();
 const canopy = new CanopyMap(async (buf) => {
   const bmp = await createImageBitmap(new Blob([buf]), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const c = new OffscreenCanvas(bmp.width, bmp.height);
@@ -103,19 +105,30 @@ function sampleLine(coords: [number, number][]) {
   return out;
 }
 
-const RANK: Record<State, number> = { dry: 0, tacky: 1, damp: 2, muddy: 3, frozen: 4, snow: 5 };
+// Draw order (worst on top): what most changes the decision to go.
+const RANK: Record<State, number> = { dry: 0, tacky: 1, frozen: 2, damp: 3, packed_snow: 4, soft_snow: 5, muddy: 6, icy: 7 };
 
 async function run(req: RunRequest): Promise<RunReply> {
   const t0 = performance.now();
-  await Promise.all([dem.load(req.box, FINE_Z, 400), dem.load(req.box, COARSE_Z, 4200), soil.load(req.box), canopy.load(req.box)]);
+  const sampled = req.trails.map((t) => sampleLine(t.coords));
+  const cLat = (req.box.north + req.box.south) / 2;
+  const cLon = (req.box.east + req.box.west) / 2;
+  await Promise.all([
+    dem.load(req.box, FINE_Z, 400),
+    dem.load(req.box, COARSE_Z, 4200),
+    soil.load(req.box),
+    canopy.load(req.box),
+    // Satellite snow is a refinement: never let it hold up or break a run.
+    snowSeen.load(cLat, cLon, sampled.flat()).catch(() => {}),
+  ]);
   const loadMs = Math.round(performance.now() - t0);
 
   const seen = new Set<string>(); // map tiles repeat lines along their edges: sample each spot once
   const stretches: Stretch[] = [];
   let count = 0;
   let missing = 0; // samples skipped because their elevation tile didn't load
-  for (const trail of req.trails) {
-    const pts = sampleLine(trail.coords);
+  for (const [ti, trail] of req.trails.entries()) {
+    const pts = sampled[ti];
     let cur: Stretch | null = null;
     let prev: [number, number] | null = null;
     const flush = () => {
@@ -145,7 +158,7 @@ async function run(req: RunRequest): Promise<RunReply> {
         continue;
       }
       count++;
-      const res = simulate({ terrain, soil: soil.at(p.lat, p.lon), canopy: canopy.at(p.lat, p.lon), surface: trail.surface }, req.wx, req.target);
+      const res = simulate({ terrain, soil: soil.at(p.lat, p.lon), canopy: canopy.at(p.lat, p.lon), surface: trail.surface, seen: snowSeen.at(p.lat, p.lon) }, req.wx, req.target);
       const here: [number, number] = [p.lon, p.lat];
       if (cur && (cur as Stretch).state === res.state) {
         const c = cur as Stretch;
@@ -171,10 +184,10 @@ async function run(req: RunRequest): Promise<RunReply> {
 async function probe(req: ProbeRequest): Promise<ProbeReply> {
   const pad = 0.002;
   const box = { west: req.lon - pad, east: req.lon + pad, south: req.lat - pad, north: req.lat + pad };
-  await Promise.all([dem.load(box, FINE_Z, 400), dem.load(box, COARSE_Z, 4200), soil.load(box), canopy.load(box)]);
+  await Promise.all([dem.load(box, FINE_Z, 400), dem.load(box, COARSE_Z, 4200), soil.load(box), canopy.load(box), snowSeen.load(req.lat, req.lon, [req])]).catch(() => {});
   const terrain = pointTerrain(dem, req.lat, req.lon, req.dir);
   if (!terrain) return { id: req.id, ok: false, error: 'no elevation data here' };
-  const site = { terrain, soil: soil.at(req.lat, req.lon), canopy: canopy.at(req.lat, req.lon), surface: req.surface };
+  const site = { terrain, soil: soil.at(req.lat, req.lon), canopy: canopy.at(req.lat, req.lon), surface: req.surface, seen: snowSeen.at(req.lat, req.lon) };
   const result = simulate(site, req.wx, req.target);
   return { id: req.id, ok: true, result, inputs: { ...site, terrain: { ...terrain, horizon: [...terrain.horizon] } } };
 }

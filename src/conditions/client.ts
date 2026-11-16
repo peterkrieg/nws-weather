@@ -5,14 +5,17 @@ import type { GeoJSONSource, LayerSpecification, Map as MlMap } from 'maplibre-g
 import type { Weather } from './model';
 import type { ProbeInputs, ProbeReply, ProbeRequest, RunReply, RunRequest, Stretch, TrailIn } from './worker';
 import type { Result } from './model';
+import { applyStations, type Ground } from './stations';
 
 export const COND_SOURCE = 'trail-cond';
 
 export const COND_COLORS = {
   muddy: '#8a4b14',
   damp: '#d9a21b',
-  frozen: '#4dabf7',
-  snow: '#a5d8ff',
+  frozen: '#1c7ed6',
+  icy: '#15aabf',
+  packed_snow: '#9775fa',
+  soft_snow: '#a5d8ff',
 } as const;
 
 /** Map layers for the glow, drawn under the trail lines themselves. */
@@ -25,12 +28,12 @@ export function conditionLayers(): LayerSpecification[] {
       type: 'line',
       source: COND_SOURCE,
       minzoom: 12,
-      filter: ['in', ['get', 'state'], ['literal', ['muddy', 'damp', 'frozen', 'snow']]],
+      filter: ['in', ['get', 'state'], ['literal', Object.keys(COND_COLORS)]],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': color,
         'line-width': width,
-        'line-opacity': ['match', ['get', 'state'], 'damp', 0.35, 0.55],
+        'line-opacity': ['match', ['get', 'state'], 'damp', 0.35, 'frozen', 0.4, 0.55],
         'line-blur': 2,
       },
     },
@@ -49,6 +52,7 @@ export interface Status {
   state: 'off' | 'zoom' | 'loading' | 'ready' | 'error' | 'unsupported';
   at?: number; // unix seconds the assessment is for
   muddyM?: number;
+  icyM?: number;
   message?: string;
   /** Diagnostics: trail samples assessed and worker time (ms), split into data loading and maths. */
   samples?: number;
@@ -169,9 +173,18 @@ export class TrailConditions {
     const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
     const hit = this.wxCache.get(key);
     if (hit && Date.now() - hit.at < 20 * 60e3) return hit.wx;
+    // Measured stations improve it but aren't required: give them a few seconds at most.
+    const groundP = fetch(`/api/ground?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`)
+      .then((g) => (g.ok ? (g.json() as Promise<Ground>) : null))
+      .catch(() => null);
+    const timeout = new Promise<null>((ok) => setTimeout(() => ok(null), 8000));
     const r = await fetch(`/api/trailwx?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
     if (!r.ok) throw new Error(`weather ${r.status}`);
-    const wx = (await r.json()) as Weather & { now: number };
+    const snowP = fetch(`/api/snow?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`)
+      .then((g) => (g.ok ? (g.json() as Promise<NonNullable<Weather['snodas']>>) : undefined))
+      .catch(() => undefined);
+    const [ground, snodas] = await Promise.all([Promise.race([groundP, timeout]), Promise.race([snowP, timeout.then(() => undefined)])]);
+    const wx = { ...applyStations((await r.json()) as Weather, ground), snodas } as Weather & { now: number };
     this.wxCache.set(key, { at: Date.now(), wx });
     return wx;
   }
@@ -241,8 +254,9 @@ export class TrailConditions {
         type: 'FeatureCollection',
         features: reply.stretches.map((s, i) => ({ type: 'Feature', id: i, properties: { state: s.state, i }, geometry: { type: 'LineString', coordinates: s.coords } })),
       });
-      const muddyM = reply.stretches.filter((s) => s.state === 'muddy').reduce((a, s) => a + s.lengthM, 0);
-      this.onStatus({ state: 'ready', at: target, muddyM, samples: reply.samples, ms: reply.ms, loadMs: reply.loadMs });
+      const lengthOf = (st: string) => reply.stretches.filter((s) => s.state === st).reduce((a, s) => a + s.lengthM, 0);
+      const muddyM = lengthOf('muddy');
+      this.onStatus({ state: 'ready', at: target, muddyM, icyM: lengthOf('icy'), samples: reply.samples, ms: reply.ms, loadMs: reply.loadMs });
       if (import.meta.env.DEV) console.log(`[conditions] ${reply.samples} samples, ${reply.stretches.length} stretches in ${reply.ms} ms`);
     } catch (err) {
       if (id !== this.runId) return;

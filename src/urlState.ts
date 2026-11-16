@@ -30,7 +30,7 @@ const parseAsPoint = createParser({
 
 const parseAsView = createParser({
   parse: (v) => {
-    const [z, lat, lon] = v.split('/').map(num);
+    const [z, lat, lon] = v.split(/[/,]/).map(num); // "15/40.8/-111.8" (or with commas)
     return z != null && lat != null && lon != null && z >= 0 && z <= 20 && Math.abs(lat) <= 90 ? { z, lat, lon } : null;
   },
   serialize: (m: MapPos) => `${Math.round(m.z * 10) / 10}/${m.lat.toFixed(5)}/${m.lon.toFixed(5)}`,

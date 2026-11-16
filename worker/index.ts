@@ -11,6 +11,9 @@ import { trailWx } from './trailwx';
 import { dem } from './dem';
 import { landcover } from './landcover';
 import { reports, type ReportEnv } from './reports';
+import { ground } from './ground';
+import { snow } from './snow';
+import { s2 } from './s2';
 
 interface Env extends ReportEnv {
   ASSETS: { fetch(req: Request): Promise<Response> };
@@ -257,6 +260,9 @@ export default {
     if (url.pathname.startsWith('/api/dem/')) return dem(url);
     if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/')) return landcover(url);
     if (url.pathname === '/api/reports') return reports(req, url, env);
+    if (url.pathname === '/api/ground') return ground(url);
+    if (url.pathname === '/api/snow') return snow(url);
+    if (url.pathname === '/api/s2') return s2(url);
     if (url.pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);
     return env.ASSETS.fetch(req);
   },
