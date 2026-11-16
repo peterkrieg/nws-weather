@@ -214,6 +214,8 @@ function buckets(data: Hour[], key: 'qpf' | 'snow') {
 }
 
 function Bar({ x, y, width, height, fill }: any) {
+  // Before the chart has measured itself (or for a bar outside the range) these can be NaN.
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
   // Inset so neighbouring buckets are separated by a gap; rounded at the top, square at the baseline.
   const gap = Math.min(3, width * 0.15);
   const w = Math.max(1, width - gap * 2);
