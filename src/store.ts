@@ -78,12 +78,14 @@ export interface Prefs {
   basemap: string;
   /** Outdoors map: colour every bike trail by difficulty (otherwise only downhill-only trails stand out). */
   mtbRatings: boolean;
+  /** Outdoors map: estimate and highlight muddy / snowy trail stretches. */
+  trailConditions: boolean;
 }
 
 const defaults = <Id extends string>(labels: Record<Id, string>): Item<Id>[] =>
   (Object.keys(labels) as Id[]).map((id) => ({ id, on: true }));
 
-export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Outdoors', mtbRatings: false });
+export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Outdoors', mtbRatings: false, trailConditions: true });
 
 /** Keep saved order, drop ids that no longer exist, append ones added since. */
 function reconcile<Id extends string>(saved: Item<Id>[] | undefined, labels: Record<Id, string>): Item<Id>[] {
@@ -100,6 +102,7 @@ export const normalizePrefs = (p: Partial<Prefs> | null): Prefs => ({
   // "Street" (standard OpenStreetMap) was retired in favour of Outdoors.
   basemap: ((b) => (!b || b === 'Street' ? 'Outdoors' : b))(p?.basemap ?? legacyBasemap()),
   mtbRatings: p?.mtbRatings ?? false,
+  trailConditions: p?.trailConditions ?? true,
 });
 
 function legacyBasemap(): string | null {

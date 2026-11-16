@@ -149,6 +149,17 @@ export default function Settings({
       </div>
       {prefs.basemap === 'Outdoors' && (
         <ul className="order-list">
+          <li className={prefs.trailConditions ? '' : 'is-off'}>
+            <Switch
+              size="sm"
+              className="order-switch"
+              checked={prefs.trailConditions}
+              onChange={(e) => setPrefs({ ...prefs, trailConditions: e.currentTarget.checked })}
+              label="Trail conditions"
+              description="Highlight trail stretches likely to be muddy, frozen or snowy (estimate)."
+              labelPosition="left"
+            />
+          </li>
           <li className={prefs.mtbRatings ? '' : 'is-off'}>
             <Switch
               size="sm"

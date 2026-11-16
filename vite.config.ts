@@ -48,6 +48,12 @@ export default defineConfig({
           // Outdoors style: vector tiles, fonts and icons from OpenFreeMap.
           tiles('openfreemap', /^https:\/\/tiles\.openfreemap\.org\//, 3000),
           tiles('terrain', /^https:\/\/s3\.amazonaws\.com\/elevation-tiles-prod\//, 200),
+          // Trail-condition terrain: elevation tiles never change.
+          {
+            urlPattern: /\/api\/(dem|soil|canopy)\//,
+            handler: 'CacheFirst' as const,
+            options: { cacheName: 'dem', expiration: { maxEntries: 800, maxAgeSeconds: 60 * DAY, purgeOnQuotaError: true }, cacheableResponse: { statuses: [200] } },
+          },
           // Forecasts are kept by the app itself (src/store.ts) so it knows how old they are.
           // Air quality and place search are live by nature: never served from a stale cache.
         ],

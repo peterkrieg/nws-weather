@@ -5,6 +5,8 @@ import { createElementObject, createLayerComponent } from '@react-leaflet/core';
 import type { Loc } from './api';
 import { AQ_LAYER, AirQualityLayer } from './AirQuality';
 import MtbLegend from './MtbLegend';
+import { conditionHtml } from './conditionText';
+import type { ConditionsStatus, Stretch } from './vectorMap';
 
 const AQ_KEY = 'wx:aq';
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
@@ -75,11 +77,24 @@ const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name :
  * The Outdoors style is drawn by MapLibre (about 250 KB), so it's fetched only when that style is
  * on screen. This stand-in layer is what the layer switch adds and removes.
  */
-type Lazy = L.Layer & { gl?: L.MaplibreGL; on_?: boolean; ratings: boolean; setRatings: (on: boolean) => void };
+type CondCtl = { setEnabled(on: boolean): void; destroy(): void; stretchAt(lng: number, lat: number): Stretch | null };
+type Lazy = L.Layer & {
+  gl?: L.MaplibreGL;
+  on_?: boolean;
+  ratings: boolean;
+  setRatings: (on: boolean) => void;
+  cond?: CondCtl;
+  condOn: boolean;
+  onCond: (s: ConditionsStatus) => void;
+  setConditions: (on: boolean) => void;
+  stretchAt: (lat: number, lng: number) => Stretch | null;
+};
 const LazyVector = L.Layer.extend({
-  initialize(this: Lazy, attribution: string, ratings: boolean) {
+  initialize(this: Lazy, attribution: string, ratings: boolean, condOn: boolean, onCond: (s: ConditionsStatus) => void) {
     (this as unknown as { options: L.LayerOptions }).options = { attribution };
     this.ratings = ratings;
+    this.condOn = condOn;
+    this.onCond = onCond;
   },
   onAdd(this: Lazy, map: L.Map) {
     this.on_ = true;
@@ -90,6 +105,8 @@ const LazyVector = L.Layer.extend({
         this.gl = gl;
         gl.addTo(map);
         m.setMtbRatings(gl.getMaplibreMap(), this.ratings);
+        this.cond = m.attachConditions(gl.getMaplibreMap(), (st) => this.onCond(st));
+        this.cond.setEnabled(this.condOn);
       })
       .catch(() => {
         /* offline or blocked: the map stays blank until another style is chosen */
@@ -98,6 +115,9 @@ const LazyVector = L.Layer.extend({
   },
   onRemove(this: Lazy) {
     this.on_ = false;
+    this.cond?.destroy();
+    this.cond = undefined;
+    this.onCond({ state: 'off' });
     this.gl?.remove();
     this.gl = undefined;
     return this;
@@ -107,17 +127,27 @@ const LazyVector = L.Layer.extend({
     const gl = this.gl;
     if (gl) void import('./vectorMap').then((m) => this.gl === gl && m.setMtbRatings(gl.getMaplibreMap(), on));
   },
-}) as unknown as new (attribution: string, ratings: boolean) => Lazy;
+  setConditions(this: Lazy, on: boolean) {
+    this.condOn = on;
+    this.cond?.setEnabled(on);
+  },
+  stretchAt(this: Lazy, lat: number, lng: number) {
+    return this.cond?.stretchAt(lng, lat) ?? null;
+  },
+}) as unknown as new (attribution: string, ratings: boolean, condOn: boolean, onCond: (s: ConditionsStatus) => void) => Lazy;
 
-const VectorLayer = createLayerComponent<Lazy, { attribution: string; ratings: boolean }>(
-  (props, ctx) => createElementObject(new LazyVector(props.attribution, props.ratings), ctx),
+type VectorProps = { attribution: string; ratings: boolean; conditions: boolean; onConditions: (s: ConditionsStatus) => void };
+const VectorLayer = createLayerComponent<Lazy, VectorProps>(
+  (props, ctx) => createElementObject(new LazyVector(props.attribution, props.ratings, props.conditions, props.onConditions), ctx),
   (layer, props, prev) => {
     if (props.ratings !== prev.ratings) layer.setRatings(props.ratings);
+    if (props.conditions !== prev.conditions) layer.setConditions(props.conditions);
+    layer.onCond = props.onConditions;
   },
 );
 
-/** Keeps the layer-menu checkbox in step when the setting changes in Layout settings. */
-function MtbSync({ toggle, on }: { toggle: React.RefObject<L.LayerGroup | null>; on: boolean }) {
+/** Keeps a layer-menu checkbox in step when the setting changes in Layout settings. */
+function OverlaySync({ toggle, on }: { toggle: React.RefObject<L.LayerGroup | null>; on: boolean }) {
   const map = useMap();
   useEffect(() => {
     const layer = toggle.current;
@@ -132,6 +162,8 @@ function MtbSync({ toggle, on }: { toggle: React.RefObject<L.LayerGroup | null>;
 /** Empty stand-in so "Bike trail difficulty" can be a checkbox in the map's layer menu. */
 export const MTB_LAYER = 'Bike trail difficulty';
 const MtbToggle = createLayerComponent<L.LayerGroup, object>((_p, ctx) => createElementObject(L.layerGroup(), ctx));
+export const COND_LAYER = 'Trail conditions';
+const CondToggle = createLayerComponent<L.LayerGroup, object>((_p, ctx) => createElementObject(L.layerGroup(), ctx));
 
 function save(key: string, value: string) {
   try {
@@ -155,17 +187,28 @@ function Controller({
   onTap,
   onBase,
   onMtb,
+  onCond,
+  vector,
 }: {
   loc: Loc | null;
   onPick: (lat: number, lon: number) => void;
   onTap: (lat: number, lon: number) => void;
   onBase: (name: string) => void;
   onMtb: (on: boolean) => void;
+  onCond: (on: boolean) => void;
+  vector: React.RefObject<Lazy | null>;
 }) {
   const map = useMap();
   useMapEvents({
     click: (e) => {
       const { lat, lng } = e.latlng.wrap();
+      // A tap on an assessed trail shows its condition instead of moving the forecast.
+      const stretch = vector.current?.stretchAt(e.latlng.lat, e.latlng.lng);
+      if (stretch) {
+        // Narrow, and panned clear of the zoom/layer buttons and the legend chip.
+        L.popup({ className: 'cond-popup', maxWidth: 240, autoPanPaddingTopLeft: [58, 12], autoPanPaddingBottomRight: [58, 48] }).setLatLng(e.latlng).setContent(conditionHtml(stretch)).openOn(map);
+        return;
+      }
       // On touch screens a stray tap while scrolling shouldn't switch the forecast, so ask first.
       if (TOUCH) onTap(lat, lng);
       else onPick(lat, lng);
@@ -173,10 +216,12 @@ function Controller({
     overlayadd: (e) => {
       if (e.name === AQ_LAYER) save(AQ_KEY, '1');
       if (e.name === MTB_LAYER) onMtb(true);
+      if (e.name === COND_LAYER) onCond(true);
     },
     overlayremove: (e) => {
       if (e.name === AQ_LAYER) save(AQ_KEY, '0');
       if (e.name === MTB_LAYER) onMtb(false);
+      if (e.name === COND_LAYER) onCond(false);
     },
     baselayerchange: (e) => onBase(e.name),
   });
@@ -281,6 +326,8 @@ export default function MapView({
   onBasemap,
   mtbRatings,
   onMtbRatings,
+  conditions,
+  onConditions,
 }: {
   loc: Loc | null;
   onPick: (lat: number, lon: number) => void;
@@ -288,6 +335,8 @@ export default function MapView({
   onBasemap: (name: string) => void;
   mtbRatings: boolean;
   onMtbRatings: (on: boolean) => void;
+  conditions: boolean;
+  onConditions: (on: boolean) => void;
 }) {
   const base = validBase(basemap);
   // The layer switch only reads `checked` when it mounts. A change made in the map's own switch is
@@ -305,6 +354,9 @@ export default function MapView({
     onBasemap(name);
   };
   const mtbToggle = useRef<L.LayerGroup>(null);
+  const condToggle = useRef<L.LayerGroup>(null);
+  const vector = useRef<Lazy>(null);
+  const [condStatus, setCondStatus] = useState<ConditionsStatus>({ state: 'off' });
   const aqOn = aqSaved();
   const [tapped, setTapped] = useState<{ lat: number; lon: number } | null>(null);
   const [full, setFull] = useState(false);
@@ -323,7 +375,7 @@ export default function MapView({
           <LayersControl.BaseLayer key={b.name} name={b.name} checked={b.name === base}>
             {/* CORS mode so the service worker can keep viewed tiles for offline use. */}
             {b.vector ? (
-              <VectorLayer attribution={b.attribution} ratings={mtbRatings} />
+              <VectorLayer ref={vector} attribution={b.attribution} ratings={mtbRatings} conditions={conditions} onConditions={setCondStatus} />
             ) : (
               <TileLayer url={b.url} attribution={b.attribution} maxNativeZoom={b.maxNativeZoom} maxZoom={18} crossOrigin="anonymous" />
             )}
@@ -333,12 +385,17 @@ export default function MapView({
           <AirQualityLayer initialOn={aqOn} />
         </LayersControl.Overlay>
         {base === 'Outdoors' && (
+          <LayersControl.Overlay name={COND_LAYER} checked={conditions}>
+            <CondToggle ref={condToggle} />
+          </LayersControl.Overlay>
+        )}
+        {base === 'Outdoors' && (
           <LayersControl.Overlay name={MTB_LAYER} checked={mtbRatings}>
             <MtbToggle ref={mtbToggle} />
           </LayersControl.Overlay>
         )}
       </LayersControl>
-      {base === 'Outdoors' && <MtbLegend ratings={mtbRatings} />}
+      {base === 'Outdoors' && <MtbLegend ratings={mtbRatings} conditions={condStatus} />}
       {loc && <Marker position={[loc.lat, loc.lon]} icon={pin} interactive={false} />}
       {tapped && <Marker position={[tapped.lat, tapped.lon]} icon={pending} interactive={false} />}
       {tapped && (
@@ -360,8 +417,9 @@ export default function MapView({
       )}
       <TwoFingerHint disabled={full} />
       <FullScreen full={full} setFull={setFull} />
-      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} />
-      <MtbSync toggle={mtbToggle} on={mtbRatings} />
+      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} onCond={onConditions} vector={vector} />
+      <OverlaySync toggle={mtbToggle} on={mtbRatings} />
+      <OverlaySync toggle={condToggle} on={conditions} />
     </MapContainer>
   );
 }

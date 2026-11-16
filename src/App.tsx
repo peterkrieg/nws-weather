@@ -245,6 +245,8 @@ export default function App() {
         <MapView loc={loc} onPick={(lat, lon) => pickPoint(lat, lon, 'map')} basemap={prefs.basemap} onBasemap={(basemap) => setPrefs((p) => ({ ...p, basemap }))}
           mtbRatings={prefs.mtbRatings}
           onMtbRatings={(mtbRatings) => setPrefs((p) => ({ ...p, mtbRatings }))}
+          conditions={prefs.trailConditions}
+          onConditions={(trailConditions) => setPrefs((p) => ({ ...p, trailConditions }))}
         />
         <p className="map-hint">{TOUCH ? 'Tap the map to check a spot' : "Click the map for that spot's forecast"}</p>
       </section>

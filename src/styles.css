@@ -604,3 +604,17 @@ footer a { color: inherit; }
 @media (max-width: 520px) { .sun-times { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .d-sun { font-size: 13px; }
 
+
+/* ---------- trail conditions ---------- */
+.cond-status { color: var(--ink-2); margin: -2px 0 4px; max-width: 200px; white-space: normal; }
+.cond-keys { margin-bottom: 4px; }
+.cond-swatch { flex: none; width: 18px; height: 8px; border-radius: 4px; opacity: 0.75; }
+.cond-tip { color: var(--muted); margin-bottom: 8px; }
+.cond-popup .leaflet-popup-content { margin: 10px 12px; font-size: 13px; line-height: 1.4; color: #222; }
+.cond-head { display: flex; align-items: center; gap: 6px; font-size: 15px; }
+.cond-head i { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.cond-sub { color: #666; margin: 2px 0 6px; }
+.cond-why { margin: 0; padding-left: 16px; }
+.cond-why li { margin: 2px 0; }
+.cond-out { margin-top: 6px; }
+.cond-note { margin-top: 6px; color: #888; font-size: 11px; }

@@ -11,6 +11,10 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
 setWorkerUrl(workerUrl);
 
+import { COND_SOURCE, TrailConditions, conditionLayers, type Status } from './conditions/client';
+export type { Status as ConditionsStatus } from './conditions/client';
+export type { Stretch } from './conditions/worker';
+
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 
@@ -116,6 +120,8 @@ function restyle(style: StyleSpecification): StyleSpecification {
   for (const layer of style.layers) {
     const id = layer.id;
     if (id === 'building-3d') continue; // flat map
+    // Trail-condition glow sits under every trail and road line.
+    if (id === 'tunnel_motorway_link_casing') layers.push(...conditionLayers());
     if (layer.type === 'line' && 'source-layer' in layer && layer['source-layer'] === 'transportation') {
       const paint = { ...(layer.paint ?? {}) } as Record<string, unknown>;
       if (id.includes('path_pedestrian')) {
@@ -162,6 +168,7 @@ function restyle(style: StyleSpecification): StyleSpecification {
     ...style,
     sources: {
       ...style.sources,
+      [COND_SOURCE]: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       dem: { type: 'raster-dem', tiles: [DEM], encoding: 'terrarium', tileSize: 256, maxzoom: 14, attribution: 'Terrain: Mapzen, AWS' },
     },
     layers,
@@ -198,6 +205,11 @@ export function setMtbRatings(map: MlMap | null | undefined, on: boolean) {
   };
   if (map.isStyleLoaded()) apply();
   else map.once('load', apply);
+}
+
+/** Starts trail-condition assessment on this map; call setEnabled on the result. */
+export function attachConditions(map: MlMap, onStatus: (s: Status) => void) {
+  return new TrailConditions(map, onStatus);
 }
 
 export async function createOutdoorsLayer(): Promise<L.Layer> {

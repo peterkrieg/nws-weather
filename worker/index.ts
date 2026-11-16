@@ -7,6 +7,10 @@
 //     positions) is chosen once a week; refreshes then ask only for PM2.5 and humidity of those
 //     ids, cached 30 min. PurpleAir bills per sensor per field, so both halves are kept lean.
 
+import { trailWx } from './trailwx';
+import { dem } from './dem';
+import { landcover } from './landcover';
+
 interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
   PURPLEAIR_KEY?: string;
@@ -248,6 +252,9 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === '/api/aq') return airQuality(url, env);
+    if (url.pathname === '/api/trailwx') return trailWx(url);
+    if (url.pathname.startsWith('/api/dem/')) return dem(url);
+    if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/')) return landcover(url);
     if (url.pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);
     return env.ASSETS.fetch(req);
   },
