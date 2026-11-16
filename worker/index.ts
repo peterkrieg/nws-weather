@@ -8,7 +8,7 @@
 //     ids, cached 30 min. PurpleAir bills per sensor per field, so both halves are kept lean.
 
 import { trailWx } from './trailwx';
-import { dem } from './dem';
+import { dem, dem2 } from './dem';
 import { landcover } from './landcover';
 import { reports, type ReportEnv } from './reports';
 import { ground } from './ground';
@@ -258,6 +258,7 @@ export default {
     if (url.pathname === '/api/aq') return airQuality(url, env);
     if (url.pathname === '/api/trailwx') return trailWx(url);
     if (url.pathname.startsWith('/api/dem/')) return dem(url);
+    if (url.pathname.startsWith('/api/dem2/')) return dem2(url);
     if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/') || url.pathname.startsWith('/api/nlcd/')) return landcover(url);
     if (url.pathname === '/api/reports') return reports(req, url, env);
     if (url.pathname === '/api/ground') return ground(url);

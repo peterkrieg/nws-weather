@@ -17,7 +17,7 @@ const get = async (p: string) => {
 };
 const [raw, ground, snodas] = await Promise.all([get(`/api/trailwx?${q}`), get(`/api/ground?${q}`), get(`/api/snow?${q}`)]);
 const wx = { ...applyStations(raw as Weather, ground), snodas } as Weather & { now: number };
-const dem = new Dem(async (x, y, z) => (await fetch(`${SITE}/api/dem/${z}/${x}/${y}`)).arrayBuffer());
+const dem = new Dem(async (x, y, z) => (await fetch(`${SITE}/api/dem2/${z}/${x}/${y}`)).arrayBuffer());
 const soil = new SoilMap(SITE);
 const box = { west: lon - 0.002, south: lat - 0.002, east: lon + 0.002, north: lat + 0.002 };
 await Promise.all([dem.load(box, FINE_Z, 400), dem.load(box, COARSE_Z, 4200), soil.load(box)]);

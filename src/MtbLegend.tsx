@@ -76,7 +76,7 @@ export default function MtbLegend({ ratings, conditions }: { ratings: boolean; c
             {condOn && (
               <>
                 <div className="mtb-head">Trail conditions</div>
-                <div className="cond-status" data-samples={conditions.samples} data-ms={conditions.ms} data-load-ms={conditions.loadMs}>
+                <div className="cond-status" data-samples={conditions.samples} data-ms={conditions.ms} data-load-ms={conditions.loadMs} data-parts={conditions.parts}>
                   {condLine(conditions)}
                 </div>
                 <ul className="mtb-keys cond-keys">

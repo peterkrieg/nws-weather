@@ -230,7 +230,7 @@ function restyle(style: StyleSpecification): StyleSpecification {
     sources: {
       ...style.sources,
       [COND_SOURCE]: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
-      dem: { type: 'raster-dem', tiles: [DEM], encoding: 'terrarium', tileSize: 256, maxzoom: 14, attribution: 'Terrain: Mapzen, AWS' },
+      dem: { type: 'raster-dem', tiles: [DEM], encoding: 'terrarium', tileSize: 256, maxzoom: 13, attribution: 'Terrain: Mapzen, AWS' }, // shading: z13 (~15 m) keeps gullies crisp at trail zoom with ~3× fewer bytes than z14
     },
     layers,
   };

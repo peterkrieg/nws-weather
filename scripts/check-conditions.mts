@@ -43,7 +43,7 @@ const CASES: Case[] = [
 ];
 
 const dem = new Dem(async (x, y, z) => {
-  const r = await fetch(`${SITE}/api/dem/${z}/${x}/${y}`);
+  const r = await fetch(`${SITE}/api/dem2/${z}/${x}/${y}`);
   if (!r.ok) throw new Error(`dem ${r.status}`);
   return r.arrayBuffer();
 });

@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActionIcon, Loader } from '@mantine/core';
 import { fetchElevation, fetchWeather, type Loc, type Place, type Weather } from './api';
 import SearchBox from './SearchBox';
 import MapView from './MapView';
 import { Alerts, Daily, Hero } from './Forecast';
-import Hourly from './Hourly';
-import Settings from './Settings';
+// Charts (recharts, ~1 MB of source) and the layout editor (drag and drop) aren't needed for the
+// first paint. The charts start loading right away, alongside the forecast request, so they're
+// usually ready by the time the forecast is; the editor loads when it's first opened.
+const hourlyChunk = import('./Hourly');
+const Hourly = lazy(() => hourlyChunk);
+const Settings = lazy(() => import('./Settings'));
 import { FavoriteEditor, FavoritesBar, FavoriteStar } from './Favorites';
 import { readJson, samePlace, savedForecast, saveForecast, useFavorites, usePrefs, writeJson, type Favorite, type Prefs, type SectionId } from './store';
 import { usePullToRefresh, Updated, UpdatePrompt } from './Pwa';
@@ -43,6 +47,11 @@ export default function App() {
   const [prefs, setPrefs] = usePrefs();
   const [favorites, setFavorites] = useFavorites();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Mounted from the first open on, so closing still animates.
+  const [settingsUsed, setSettingsUsed] = useState(false);
+  useEffect(() => {
+    if (settingsOpen) setSettingsUsed(true);
+  }, [settingsOpen]);
   const [editing, setEditing] = useState<Favorite | null>(null);
   const [fetchedAt, setFetchedAt] = useState(0);
   const [offline, setOffline] = useState(false);
@@ -305,7 +314,9 @@ export default function App() {
     hourly:
       wx && wx.hours.length > 1 && anyChart ? (
         <section key="hourly" className={cls('hourly')}>
-          <Hourly hours={wx.hours} lat={wx.lat} lon={wx.lon} source={wx.source} charts={prefs.charts} />
+          <Suspense fallback={<div className="hourly-wait" />}>
+            <Hourly hours={wx.hours} lat={wx.lat} lon={wx.lon} source={wx.source} charts={prefs.charts} />
+          </Suspense>
         </section>
       ) : null,
   };
@@ -341,7 +352,11 @@ export default function App() {
       </main>
 
       <UpdatePrompt />
-      <Settings opened={settingsOpen} onClose={() => setSettingsOpen(false)} prefs={shownPrefs} setPrefs={setShownPrefs} />
+      {settingsUsed && (
+        <Suspense fallback={null}>
+          <Settings opened={settingsOpen} onClose={() => setSettingsOpen(false)} prefs={shownPrefs} setPrefs={setShownPrefs} />
+        </Suspense>
+      )}
       <FavoriteEditor
         fav={editing}
         onSave={saveFavorite}

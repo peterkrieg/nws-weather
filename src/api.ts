@@ -207,25 +207,78 @@ function buildHours(grid: any, hourly: any, tz: string): Hour[] {
   return hours;
 }
 
-export async function fetchWeather(lat: number, lon: number): Promise<Weather> {
-  const uvPromise = fetchUv(lat, lon);
-  let point: any;
+// Which NWS forecast grid square a spot falls in practically never changes, so the lookup is
+// remembered per spot: a repeat forecast skips one round trip (~0.25 s on a phone) and fetches
+// the forecast straight away. Refreshed in the background each time, and redone if it goes stale.
+const POINTS_KEY = 'wx:nwsPoints';
+type PointInfo = { forecast: string; forecastHourly: string; forecastGridData: string; timeZone: string; cwa?: string; relativeLocation?: any } | { intl: true };
+function readPoints(): Record<string, PointInfo> {
   try {
-    point = (await nws(`${NWS}/points/${coord(lat)},${coord(lon)}`)).properties;
+    return JSON.parse(localStorage.getItem(POINTS_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+function rememberPoint(key: string, info: PointInfo) {
+  try {
+    const all = readPoints();
+    delete all[key];
+    all[key] = info;
+    const keys = Object.keys(all);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete all[k];
+    localStorage.setItem(POINTS_KEY, JSON.stringify(all));
+  } catch {
+    /* storage unavailable: just slower */
+  }
+}
+async function lookupPoint(lat: number, lon: number): Promise<PointInfo> {
+  let p: any;
+  try {
+    p = (await nws(`${NWS}/points/${coord(lat)},${coord(lon)}`)).properties;
   } catch (e) {
     // NWS answers 4xx for anywhere outside the US and its territories: use the global forecast there.
-    if (e instanceof HttpError && e.status < 500) return fetchIntl(lat, lon, uvPromise);
+    if (e instanceof HttpError && e.status < 500) return { intl: true };
     throw new Error('The National Weather Service API did not respond. Try again in a moment.');
   }
-  if (!point?.forecastGridData) return fetchIntl(lat, lon, uvPromise);
+  if (!p?.forecastGridData) return { intl: true };
+  const rl = p.relativeLocation?.properties;
+  return {
+    forecast: p.forecast,
+    forecastHourly: p.forecastHourly,
+    forecastGridData: p.forecastGridData,
+    timeZone: p.timeZone,
+    cwa: p.cwa,
+    relativeLocation: rl ? { properties: { city: rl.city, state: rl.state, distance: rl.distance, bearing: rl.bearing } } : undefined,
+  };
+}
 
-  const [fc, hourly, grid, alerts] = await Promise.allSettled([
-    nws(point.forecast),
-    nws(point.forecastHourly),
-    nws(point.forecastGridData),
-    nws(`${NWS}/alerts/active?point=${coord(lat)},${coord(lon)}`, 0),
-  ]);
+export async function fetchWeather(lat: number, lon: number): Promise<Weather> {
+  const uvPromise = fetchUv(lat, lon);
+  const key = `${coord(lat)},${coord(lon)}`;
+  const cached = readPoints()[key];
+  const fresh = lookupPoint(lat, lon).then((info) => {
+    rememberPoint(key, info);
+    return info;
+  });
+  if (cached) fresh.catch(() => {}); // background refresh; errors only matter without a cached answer
+  let point: any = cached ?? (await fresh);
+  if ('intl' in point) return fetchIntl(lat, lon, uvPromise);
+
+  const load = (pt: any) =>
+    Promise.allSettled([
+      nws(pt.forecast),
+      nws(pt.forecastHourly),
+      nws(pt.forecastGridData),
+      nws(`${NWS}/alerts/active?point=${coord(lat)},${coord(lon)}`, 0),
+    ]);
   const ok = <T,>(r: PromiseSettledResult<T>) => (r.status === 'fulfilled' ? r.value : null);
+  let [fc, hourly, grid, alerts] = await load(point);
+  if (cached && !ok(fc) && !ok(hourly) && !ok(grid)) {
+    // The remembered grid square may be out of date: look it up again.
+    point = await fresh;
+    if ('intl' in point) return fetchIntl(lat, lon, uvPromise);
+    [fc, hourly, grid, alerts] = await load(point);
+  }
   if (!ok(fc) && !ok(hourly) && !ok(grid)) {
     throw new Error('The National Weather Service forecast for this spot is temporarily unavailable. Try again in a moment.');
   }

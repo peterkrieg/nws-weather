@@ -49,7 +49,7 @@ export default defineConfig({
           tiles('terrain', /^https:\/\/s3\.amazonaws\.com\/elevation-tiles-prod\//, 200),
           // Trail-condition terrain: elevation tiles never change.
           {
-            urlPattern: /\/api\/(dem|soil|canopy)\//,
+            urlPattern: /\/api\/(dem2?|soil|canopy)\//,
             handler: 'CacheFirst' as const,
             options: { cacheName: 'dem', expiration: { maxEntries: 800, maxAgeSeconds: 60 * DAY, purgeOnQuotaError: true }, cacheableResponse: { statuses: [200] } },
           },

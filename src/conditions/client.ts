@@ -3,7 +3,7 @@
 
 import type { GeoJSONSource, LayerSpecification, Map as MlMap } from 'maplibre-gl';
 import type { Weather } from './model';
-import type { ProbeInputs, ProbeReply, ProbeRequest, RunReply, RunRequest, Stretch, TrailIn } from './worker';
+import type { PrefetchRequest, ProbeInputs, ProbeReply, ProbeRequest, RunReply, RunRequest, Stretch, TrailIn } from './worker';
 import type { Result } from './model';
 import { applyStations, type Ground } from './stations';
 
@@ -58,6 +58,7 @@ export interface Status {
   samples?: number;
   ms?: number;
   loadMs?: number;
+  parts?: string;
 }
 
 const MIN_ZOOM = 12.9; // MapLibre zoom (Leaflet's is one higher): trails show from Leaflet 14
@@ -123,7 +124,7 @@ export class TrailConditions {
   private retries = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stretches: Stretch[] = [];
-  private wxCache = new Map<string, { at: number; wx: Weather & { now: number } }>();
+  private wxCache = new Map<string, { at: number; wx: Promise<Weather & { now: number }> }>();
 
   constructor(
     private map: MlMap,
@@ -165,28 +166,52 @@ export class TrailConditions {
 
   private schedule = () => {
     if (!this.enabled) return;
+    this.warm();
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.run(), 500);
+    this.timer = setTimeout(() => void this.run(), 300);
   };
 
-  private async weather(lat: number, lon: number) {
+  /** The view's area, a little beyond the screen so trails don't change colour right at the edge. */
+  private viewBox() {
+    const b = this.map.getBounds();
+    const padX = (b.getEast() - b.getWest()) * 0.1;
+    const padY = (b.getNorth() - b.getSouth()) * 0.1;
+    return { west: b.getWest() - padX, south: b.getSouth() - padY, east: b.getEast() + padX, north: b.getNorth() + padY };
+  }
+
+  /** Start the weather request before the trail lines have loaded. */
+  private warm() {
+    if (this.map.getZoom() < MIN_ZOOM) return;
+    // (Starting terrain downloads here too was measured: no faster, as they compete with the map's
+    // own tiles for bandwidth; the run's prefetch starts them early enough.)
+    const c = this.map.getCenter();
+    void this.weather(c.lat, c.lng).catch(() => {});
+  }
+
+  /** Weather for the 0.1° cell, shared by concurrent callers and kept 20 minutes. */
+  private weather(lat: number, lon: number) {
     const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
     const hit = this.wxCache.get(key);
     if (hit && Date.now() - hit.at < 20 * 60e3) return hit.wx;
+    const wx = this.fetchWeather(lat, lon);
+    this.wxCache.set(key, { at: Date.now(), wx });
+    wx.catch(() => this.wxCache.get(key)?.wx === wx && this.wxCache.delete(key));
+    return wx;
+  }
+
+  private async fetchWeather(lat: number, lon: number) {
     // Measured stations improve it but aren't required: give them a few seconds at most.
     const groundP = fetch(`/api/ground?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`)
       .then((g) => (g.ok ? (g.json() as Promise<Ground>) : null))
       .catch(() => null);
     const timeout = new Promise<null>((ok) => setTimeout(() => ok(null), 8000));
-    const r = await fetch(`/api/trailwx?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
-    if (!r.ok) throw new Error(`weather ${r.status}`);
     const snowP = fetch(`/api/snow?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`)
       .then((g) => (g.ok ? (g.json() as Promise<NonNullable<Weather['snodas']>>) : undefined))
       .catch(() => undefined);
+    const r = await fetch(`/api/trailwx?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
+    if (!r.ok) throw new Error(`weather ${r.status}`);
     const [ground, snodas] = await Promise.all([Promise.race([groundP, timeout]), Promise.race([snowP, timeout.then(() => undefined)])]);
-    const wx = { ...applyStations((await r.json()) as Weather, ground), snodas } as Weather & { now: number };
-    this.wxCache.set(key, { at: Date.now(), wx });
-    return wx;
+    return { ...applyStations((await r.json()) as Weather, ground), snodas } as Weather & { now: number };
   }
 
   private async run() {
@@ -198,10 +223,7 @@ export class TrailConditions {
       return;
     }
     const b = map.getBounds();
-    // A little beyond the screen so trails don't change colour right at the edge while panning.
-    const padX = (b.getEast() - b.getWest()) * 0.1;
-    const padY = (b.getNorth() - b.getSouth()) * 0.1;
-    const box = { west: b.getWest() - padX, south: b.getSouth() - padY, east: b.getEast() + padX, north: b.getNorth() + padY };
+    const box = this.viewBox();
     const trails = collectTrails(map, box);
     if (!trails.length) {
       this.clear();
@@ -217,23 +239,33 @@ export class TrailConditions {
     const id = ++this.runId;
     this.onStatus({ state: 'loading' });
     const c = b.getCenter();
-    try {
-      const wx = await this.weather(c.lat, c.lng);
-      const target = Math.floor(Date.now() / 1000);
-      if (target > wx.t[wx.t.length - 1]) throw new Error('weather too old');
-      this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-      const req: RunRequest = { id, trails, wx, target, box };
-      const reply = await new Promise<RunReply>((resolve) => {
+    this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    // Terrain, soil and satellite downloads start now, alongside the weather request.
+    this.worker.postMessage({ kind: 'prefetch', trails, box } satisfies PrefetchRequest);
+    const ask = (req: RunRequest) =>
+      new Promise<RunReply>((resolve) => {
         const w = this.worker!;
         const onMsg = (e: MessageEvent<RunReply>) => {
-          if (e.data.id !== id) return;
+          if (e.data.id !== req.id) return;
           w.removeEventListener('message', onMsg);
           resolve(e.data);
         };
         w.addEventListener('message', onMsg);
         w.postMessage(req);
       });
+    try {
+      const wx = await this.weather(c.lat, c.lng);
+      const target = Math.floor(Date.now() / 1000);
+      if (target > wx.t[wx.t.length - 1]) throw new Error('weather too old');
+      const req: RunRequest = { id, trails, wx, target, box };
+      let reply = await ask(req);
       if (id !== this.runId || !this.enabled) return; // superseded
+      if (reply.ok && reply.partial && !reply.missing && reply.samples) {
+        // Drawn without the satellite look (still loading); redraw once it's in.
+        this.show(reply, target);
+        reply = await ask({ ...req, waitSatellite: true });
+        if (id !== this.runId || !this.enabled) return;
+      }
       if (!reply.ok) throw new Error(reply.error);
       // Some elevation tiles didn't arrive (USGS is slow to render a new area): try again shortly.
       if (reply.missing) {
@@ -249,19 +281,31 @@ export class TrailConditions {
         this.onStatus({ state: 'unsupported', message: 'Trail conditions need US elevation data' });
         return;
       }
-      this.stretches = reply.stretches;
-      (map.getSource(COND_SOURCE) as GeoJSONSource | undefined)?.setData({
-        type: 'FeatureCollection',
-        features: reply.stretches.map((s, i) => ({ type: 'Feature', id: i, properties: { state: s.state, i }, geometry: { type: 'LineString', coordinates: s.coords } })),
-      });
-      const lengthOf = (st: string) => reply.stretches.filter((s) => s.state === st).reduce((a, s) => a + s.lengthM, 0);
-      const muddyM = lengthOf('muddy');
-      this.onStatus({ state: 'ready', at: target, muddyM, icyM: lengthOf('icy'), samples: reply.samples, ms: reply.ms, loadMs: reply.loadMs });
-      if (import.meta.env.DEV) console.log(`[conditions] ${reply.samples} samples, ${reply.stretches.length} stretches in ${reply.ms} ms`);
+      this.show(reply, target);
     } catch (err) {
       if (id !== this.runId) return;
       this.onStatus({ state: 'error', message: String(err) });
     }
+  }
+
+  private show(reply: Extract<RunReply, { ok: true }>, target: number) {
+    this.stretches = reply.stretches;
+    (this.map.getSource(COND_SOURCE) as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features: reply.stretches.map((s, i) => ({ type: 'Feature', id: i, properties: { state: s.state, i }, geometry: { type: 'LineString', coordinates: s.coords } })),
+    });
+    const lengthOf = (st: string) => reply.stretches.filter((s) => s.state === st).reduce((a, s) => a + s.lengthM, 0);
+    this.onStatus({
+      state: 'ready',
+      at: target,
+      muddyM: lengthOf('muddy'),
+      icyM: lengthOf('icy'),
+      samples: reply.samples,
+      ms: reply.ms,
+      loadMs: reply.loadMs,
+      parts: reply.parts ? JSON.stringify(reply.parts) + (reply.partial ? ' partial' : '') : undefined,
+    });
+    if (import.meta.env.DEV) console.log(`[conditions] ${reply.samples} samples, ${reply.stretches.length} stretches in ${reply.ms} ms${reply.partial ? ' (before satellite)' : ''}`);
   }
 
   /**

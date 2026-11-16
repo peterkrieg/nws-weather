@@ -85,3 +85,78 @@ function unpredictFloat(bytes: Uint8Array, w: number, h: number): Uint8Array<Arr
   }
   return out;
 }
+
+// ---- Compact elevation tiles ----------------------------------------------------------------------
+// USGS tiles are 256 KB of raw float32. /api/dem2 re-encodes them once at the edge: elevations to
+// the nearest 10 cm, each row as its first value then neighbour-to-neighbour differences (small
+// numbers, so gzip squeezes a tile to ~60 KB). Layout, little-endian:
+//   "DM" 1 0 | width u16 | height u16 | per row: first i32, then (width−1) × i16 differences;
+//   a difference of −32768 is followed by the value itself as an i32 (big jumps, no-data).
+const NODATA_DM = -2147483648;
+const NODATA = -3.4028234663852886e38;
+
+export function encodeDem(r: Raster): Uint8Array {
+  const { width: w, height: h, data } = r;
+  const out = new DataView(new ArrayBuffer(8 + h * (4 + (w - 1) * 6)));
+  out.setUint8(0, 0x44);
+  out.setUint8(1, 0x4d);
+  out.setUint8(2, 1);
+  out.setUint16(4, w, true);
+  out.setUint16(6, h, true);
+  let o = 8;
+  const dm = (v: number) => (Number.isFinite(v) && v > -10000 ? Math.round(v * 10) : NODATA_DM);
+  for (let y = 0; y < h; y++) {
+    let prev = dm(data[y * w]);
+    out.setInt32(o, prev, true);
+    o += 4;
+    for (let x = 1; x < w; x++) {
+      const v = dm(data[y * w + x]);
+      const d = v - prev;
+      if (prev !== NODATA_DM && v !== NODATA_DM && d > -32768 && d <= 32767) {
+        out.setInt16(o, d, true);
+        o += 2;
+      } else {
+        out.setInt16(o, -32768, true);
+        out.setInt32(o + 2, v, true);
+        o += 6;
+      }
+      prev = v;
+    }
+  }
+  return new Uint8Array(out.buffer, 0, o);
+}
+
+export function decodeDem(buf: ArrayBuffer): Raster {
+  const dv = new DataView(buf);
+  const w = dv.getUint16(4, true);
+  const h = dv.getUint16(6, true);
+  const data = new Float32Array(w * h);
+  let o = 8;
+  const val = (q: number) => (q === NODATA_DM ? NODATA : q / 10);
+  for (let y = 0; y < h; y++) {
+    let prev = dv.getInt32(o, true);
+    o += 4;
+    data[y * w] = val(prev);
+    for (let x = 1; x < w; x++) {
+      const d = dv.getInt16(o, true);
+      o += 2;
+      if (d === -32768) {
+        prev = dv.getInt32(o, true);
+        o += 4;
+      } else prev += d;
+      data[y * w + x] = val(prev);
+    }
+  }
+  return { width: w, height: h, data };
+}
+
+/** An elevation tile in either format: compact (/api/dem2) or the original GeoTIFF. */
+export async function readDem(buf: ArrayBuffer): Promise<Raster> {
+  let b = new Uint8Array(buf, 0, 2);
+  if (b[0] === 0x1f && b[1] === 0x8b) {
+    // gzipped compact tile (as /api/dem2 sends it)
+    buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    b = new Uint8Array(buf, 0, 2);
+  }
+  return b[0] === 0x44 && b[1] === 0x4d ? decodeDem(buf) : readFloatTiff(buf);
+}

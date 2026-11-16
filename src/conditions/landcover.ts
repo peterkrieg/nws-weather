@@ -54,6 +54,7 @@ function inside(rings: [number, number][][], x: number, y: number) {
 
 export class SoilMap {
   private tiles = new Map<string, SoilPoly[] | null>();
+  private pending = new Map<string, Promise<void>>();
   /** `base`: origin serving /api/soil (empty in the app; the live site in scripts). */
   constructor(private base = '') {}
 
@@ -64,13 +65,19 @@ export class SoilMap {
     for (let x = Math.floor(a.x); x <= Math.floor(b.x); x++)
       for (let y = Math.floor(a.y); y <= Math.floor(b.y); y++) {
         const k = `${x}/${y}`;
-        if (this.tiles.has(k)) continue;
+        if (this.tiles.has(k)) {
+          // Still downloading for an earlier call: wait for it rather than skip it.
+          const inFlight = this.pending.get(k);
+          if (inFlight) jobs.push(inFlight);
+          continue;
+        }
         this.tiles.set(k, null);
-        jobs.push(
-          this.fetchTile(x, y)
+        const job = this.fetchTile(x, y)
             .then((p) => void this.tiles.set(k, p))
-            .catch(() => void this.tiles.delete(k)),
-        );
+          .catch(() => void this.tiles.delete(k))
+          .finally(() => this.pending.delete(k));
+        this.pending.set(k, job);
+        jobs.push(job);
       }
     await Promise.all(jobs);
   }
@@ -158,6 +165,7 @@ export type ImageDecoder = (buf: ArrayBuffer) => Promise<{ data: Uint8ClampedArr
 
 export class CanopyMap {
   private tiles = new Map<string, Uint8Array | null>();
+  private pending = new Map<string, Promise<void>>();
   private legend: Map<number, number> | null = null;
   /** kind 'nlcd': land cover class codes (41 deciduous, 42 evergreen, 43 mixed, 52 shrub…) instead of %. */
   constructor(private decode: ImageDecoder | null, private kind: CoverKind = 'canopy') {}
@@ -184,13 +192,19 @@ export class CanopyMap {
     for (let x = Math.floor(a.x); x <= Math.floor(b.x); x++)
       for (let y = Math.floor(a.y); y <= Math.floor(b.y); y++) {
         const k = `${x}/${y}`;
-        if (this.tiles.has(k)) continue;
+        if (this.tiles.has(k)) {
+          // Still downloading for an earlier call: wait for it rather than skip it.
+          const inFlight = this.pending.get(k);
+          if (inFlight) jobs.push(inFlight);
+          continue;
+        }
         this.tiles.set(k, null);
-        jobs.push(
-          this.fetchTile(x, y, legend)
+        const job = this.fetchTile(x, y, legend)
             .then((v) => void this.tiles.set(k, v))
-            .catch(() => void this.tiles.delete(k)),
-        );
+          .catch(() => void this.tiles.delete(k))
+          .finally(() => this.pending.delete(k));
+        this.pending.set(k, job);
+        jobs.push(job);
       }
     await Promise.all(jobs);
   }

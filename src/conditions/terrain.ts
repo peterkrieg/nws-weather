@@ -5,7 +5,7 @@
 //   coarse z12 tiles at 256 px  (~30 m)          — the distant skyline for sun/shade
 
 import { D2R, merc, mPerDeg, offset, tileBoundsMerc, tileXY } from './geo';
-import { readFloatTiff, type Raster } from './tiff';
+import { readDem, type Raster } from './tiff';
 
 export const FINE_Z = 15;
 export const COARSE_Z = 12;
@@ -44,6 +44,7 @@ export function demUrl(x: number, y: number, z: number) {
 
 export class Dem {
   private tiles = new Map<string, Tile | null>();
+  private pending = new Map<string, Promise<void>>();
   constructor(private fetcher: Fetcher) {}
 
   private key(x: number, y: number, z: number) {
@@ -60,19 +61,25 @@ export class Dem {
     for (let x = Math.floor(a.x); x <= Math.floor(b.x); x++) {
       for (let y = Math.floor(a.y); y <= Math.floor(b.y); y++) {
         const k = this.key(x, y, z);
-        if (this.tiles.has(k)) continue;
+        if (this.tiles.has(k)) {
+          // Still downloading for an earlier call: wait for it rather than skip it.
+          const inFlight = this.pending.get(k);
+          if (inFlight) jobs.push(inFlight);
+          continue;
+        }
         this.tiles.set(k, null);
-        jobs.push(
-          // USGS renders tiles on demand and the first request for an area can fail: one retry.
-          this.fetcher(x, y, z)
-            .catch(() => new Promise((ok) => setTimeout(ok, 1500)).then(() => this.fetcher(x, y, z)))
-            .then(readFloatTiff)
-            .then((r) => {
-              const bounds = tileBoundsMerc(x, y, z);
-              this.tiles.set(k, { r, minx: bounds.minx, maxy: bounds.maxy, size: bounds.maxx - bounds.minx });
-            })
-            .catch(() => void this.tiles.delete(k)), // try again next time
-        );
+        // USGS renders tiles on demand and the first request for an area can fail: one retry.
+        const job = this.fetcher(x, y, z)
+          .catch(() => new Promise((ok) => setTimeout(ok, 1500)).then(() => this.fetcher(x, y, z)))
+          .then(readDem)
+          .then((r) => {
+            const bounds = tileBoundsMerc(x, y, z);
+            this.tiles.set(k, { r, minx: bounds.minx, maxy: bounds.maxy, size: bounds.maxx - bounds.minx });
+          })
+          .catch(() => void this.tiles.delete(k)) // try again next time
+          .finally(() => this.pending.delete(k));
+        this.pending.set(k, job);
+        jobs.push(job);
       }
     }
     await Promise.all(jobs);

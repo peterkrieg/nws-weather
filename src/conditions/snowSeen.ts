@@ -70,7 +70,24 @@ async function range(url: string, start: number, end: number) {
 
 /** First image (full resolution) of a tiled TIFF: tile layout only. */
 async function readHeader(url: string): Promise<Header> {
-  const b = await range(url, 0, 65535);
+  // The first image's directory and tile tables sit in the first few KB (~1 KB of tables for a
+  // classification file); read more only if they don't.
+  let b = await range(url, 0, 16383);
+  {
+    const dv0 = new DataView(b.buffer);
+    const le0 = b[0] === 0x49;
+    const ifd0 = dv0.getUint32(4, le0);
+    const n0 = ifd0 + 2 <= b.length ? dv0.getUint16(ifd0, le0) : 0;
+    let need = ifd0 + 2 + n0 * 12 + 4;
+    for (let i = 0; i < n0 && need <= b.length; i++) {
+      const o = ifd0 + 2 + i * 12;
+      const type = dv0.getUint16(o + 2, le0);
+      const count = dv0.getUint32(o + 4, le0);
+      const size = (type === 3 ? 2 : type === 16 ? 8 : 4) * count;
+      if (size > 4) need = Math.max(need, dv0.getUint32(o + 8, le0) + size);
+    }
+    if (need > b.length) b = await range(url, 0, Math.max(need, 65535));
+  }
   const dv = new DataView(b.buffer);
   const le = b[0] === 0x49;
   const u16 = (o: number) => dv.getUint16(o, le);
@@ -115,6 +132,11 @@ export class SceneReader {
       this.failed = true;
       throw e;
     }));
+  }
+
+  /** Start reading the header (errors surface on use). */
+  warm() {
+    this.head().catch(() => {});
   }
 
   /** Pixel row/col of a point, or null when outside the scene. */
@@ -164,9 +186,20 @@ export class SnowSeen {
   private scenes: Scene[] = [];
   private loadedFor = '';
   private seen = new Map<string, Seen | null>();
+  private inflight: Promise<void> = Promise.resolve();
 
-  /** Fetch the scene list for the area and the tiles under these points. */
-  async load(lat: number, lon: number, points: { lat: number; lon: number }[]) {
+  /**
+   * Fetch the scene list for the area and the tiles under these points. Calls queue behind each
+   * other, so a second call for the same points waits for the first's answers instead of seeing
+   * them as "asked already" and returning none.
+   */
+  load(lat: number, lon: number, points: { lat: number; lon: number }[]) {
+    const job = this.inflight.then(() => this.loadNow(lat, lon, points));
+    this.inflight = job.catch(() => {});
+    return job;
+  }
+
+  private async loadNow(lat: number, lon: number, points: { lat: number; lon: number }[]) {
     const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
     if (key !== this.loadedFor) {
       const r = await fetch(`/api/s2?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
@@ -175,22 +208,38 @@ export class SnowSeen {
     }
     const todo = points.filter((p) => !this.seen.has(this.key(p.lat, p.lon)));
     for (const p of todo) this.seen.set(this.key(p.lat, p.lon), null);
-    // Newest scene first; each point stops at the first clear look.
+    // Newest scene first; each point stops at the first clear look. Headers for every scene are
+    // asked for at once (one round trip, not one per scene).
     let left = todo;
     let failed = false;
-    for (const s of this.scenes) {
-      if (!left.length) break;
-      const reader = this.readers.get(s.href) ?? new SceneReader(s);
-      this.readers.set(s.href, reader);
-      reader.failed = false;
-      const next: typeof left = [];
-      // Pull the tiles these points need in parallel first, then classify.
-      await Promise.all(
-        [...new Set(left.map((p) => reader.pixel(p.lat, p.lon)).filter((px): px is [number, number] => !!px).map(([r, c]) => `${(r / 512) | 0},${(c / 512) | 0}`))].map((k) => {
+    if (todo.length)
+      for (const s of this.scenes) {
+        const reader = this.readers.get(s.href) ?? new SceneReader(s);
+        this.readers.set(s.href, reader);
+        void reader.warm();
+      }
+    const readerFor = (s: Scene) => {
+      const r = this.readers.get(s.href) ?? new SceneReader(s);
+      this.readers.set(s.href, r);
+      return r;
+    };
+    // The tiles a scene needs for these points (a few small 512 px tiles), all at once.
+    const pull = (reader: SceneReader, pts: typeof left) =>
+      Promise.all(
+        [...new Set(pts.map((p) => reader.pixel(p.lat, p.lon)).filter((px): px is [number, number] => !!px).map(([r, c]) => `${(r / 512) | 0},${(c / 512) | 0}`))].map((k) => {
           const [tr, tc] = k.split(',').map(Number);
           return reader.tileFor(tr * 512, tc * 512).catch(() => null);
         }),
       ).catch(() => {});
+    const AHEAD = 3; // scenes read ahead while the current one is classified (round trips overlap)
+    for (let si = 0; si < this.scenes.length; si++) {
+      if (!left.length) break;
+      const s = this.scenes[si];
+      const reader = readerFor(s);
+      reader.failed = false;
+      const next: typeof left = [];
+      for (const s2 of this.scenes.slice(si + 1, si + 1 + AHEAD)) void pull(readerFor(s2), left);
+      await pull(reader, left);
       for (const p of left) {
         const cls = await reader.classAt(p.lat, p.lon).catch(() => null);
         if (cls != null && CLEAR.has(cls)) this.seen.set(this.key(p.lat, p.lon), { snow: cls === SNOW, at: s.at });

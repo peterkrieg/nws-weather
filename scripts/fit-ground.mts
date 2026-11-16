@@ -11,7 +11,7 @@ const lat = Number(process.argv[2] ?? 40.8);
 const lon = Number(process.argv[3] ?? -111.86);
 const g = (await (await fetch(`${SITE}/api/ground?lat=${lat}&lon=${lon}`)).json()) as Ground;
 const dem = new Dem(async (x, y, z) => {
-  const r = await fetch(`${SITE}/api/dem/${z}/${x}/${y}`);
+  const r = await fetch(`${SITE}/api/dem2/${z}/${x}/${y}`);
   if (!r.ok) throw new Error('dem');
   return r.arrayBuffer();
 });

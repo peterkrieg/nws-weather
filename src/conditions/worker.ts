@@ -21,6 +21,15 @@ export interface RunRequest {
   wx: Weather;
   target: number; // unix seconds
   box: { west: number; south: number; east: number; north: number };
+  /** Wait for the satellite snow look (the second pass); otherwise reply without it if it's slow. */
+  waitSatellite?: boolean;
+}
+
+/** Start downloading terrain, soil, cover and satellite data for a view while the weather loads. */
+export interface PrefetchRequest {
+  kind: 'prefetch';
+  trails: TrailIn[];
+  box: RunRequest['box'];
 }
 
 export interface Stretch {
@@ -53,13 +62,13 @@ export interface ProbeInputs {
 export type ProbeReply = { id: number; ok: true; inputs: ProbeInputs; result: Result } | { id: number; ok: false; error: string };
 
 export type RunReply =
-  | { id: number; ok: true; stretches: Stretch[]; samples: number; missing: number; ms: number; loadMs: number }
+  | { id: number; ok: true; stretches: Stretch[]; samples: number; missing: number; ms: number; loadMs: number; parts?: Record<string, number>; partial?: boolean }
   | { id: number; ok: false; error: string };
 
 const STEP = 5; // metres between samples
 
 const dem = new Dem(async (x, y, z) => {
-  const r = await fetch(`/api/dem/${z}/${x}/${y}`);
+  const r = await fetch(`/api/dem2/${z}/${x}/${y}`);
   if (!r.ok) throw new Error(`dem ${r.status}`);
   return r.arrayBuffer();
 });
@@ -110,21 +119,53 @@ function sampleLine(coords: [number, number][]) {
 // Draw order (worst on top): what most changes the decision to go.
 const RANK: Record<State, number> = { dry: 0, tacky: 1, frozen: 2, damp: 3, packed_snow: 4, soft_snow: 5, muddy: 6, icy: 7 };
 
+/** Downloads for a view: what the model needs (core) and the satellite look (s2), started once. */
+interface Loads {
+  key: string;
+  t0: number;
+  parts: Record<string, number>;
+  core: Promise<unknown>;
+  s2: Promise<unknown>;
+}
+let loads: Loads | null = null;
+const boxKey = (b: RunRequest['box']) => [b.west, b.south, b.east, b.north].map((v) => v.toFixed(5)).join(',');
+
+function startLoads(box: RunRequest['box'], trails: TrailIn[]): Loads {
+  const key = boxKey(box);
+  if (loads?.key === key) return loads;
+  const t0 = performance.now();
+  // How long each data source took (ms), for the status line's data-parts attribute.
+  const parts: Record<string, number> = {};
+  const timed = <T,>(name: string, p: Promise<T>) => p.finally(() => (parts[name] = Math.round(performance.now() - t0)));
+  const points = trails.flatMap((t) => sampleLine(t.coords));
+  loads = {
+    key,
+    t0,
+    parts,
+    core: Promise.all([
+      timed('dem', dem.load(box, FINE_Z, 400)),
+      timed('dem2', dem.load(box, COARSE_Z, 4200)),
+      timed('soil', soil.load(box)),
+      timed('canopy', canopy.load(box)),
+      timed('nlcd', landCover.load(box).catch(() => {})),
+    ]),
+    // Satellite snow is a refinement: never let it hold up or break a run.
+    s2: timed('s2', snowSeen.load((box.north + box.south) / 2, (box.east + box.west) / 2, points).catch(() => {})),
+  };
+  return loads;
+}
+
 async function run(req: RunRequest): Promise<RunReply> {
   const t0 = performance.now();
   const sampled = req.trails.map((t) => sampleLine(t.coords));
-  const cLat = (req.box.north + req.box.south) / 2;
-  const cLon = (req.box.east + req.box.west) / 2;
-  await Promise.all([
-    dem.load(req.box, FINE_Z, 400),
-    dem.load(req.box, COARSE_Z, 4200),
-    soil.load(req.box),
-    canopy.load(req.box),
-    landCover.load(req.box).catch(() => {}),
-    // Satellite snow is a refinement: never let it hold up or break a run.
-    snowSeen.load(cLat, cLon, sampled.flat()).catch(() => {}),
-  ]);
-  const loadMs = Math.round(performance.now() - t0);
+  const l = startLoads(req.box, req.trails);
+  await l.core;
+  // First pass: don't wait on a slow satellite read (the client asks again once it's in).
+  let s2Done = true;
+  if (req.waitSatellite) await l.s2;
+  else s2Done = await Promise.race([l.s2.then(() => true), new Promise<boolean>((ok) => setTimeout(() => ok(false), 50))]);
+  const loadMs = Math.round(performance.now() - Math.min(t0, l.t0));
+  const parts = l.parts;
 
   const seen = new Set<string>(); // map tiles repeat lines along their edges: sample each spot once
   const stretches: Stretch[] = [];
@@ -181,7 +222,8 @@ async function run(req: RunRequest): Promise<RunReply> {
   // Drop sub-5 m flickers of a milder state between two worse stretches? Keep everything: a single
   // muddy 5 m spot is exactly what this is for. Sort so the worst draws on top.
   stretches.sort((a, b) => RANK[a.state] - RANK[b.state]);
-  return { id: req.id, ok: true, stretches, samples: count, missing, ms: Math.round(performance.now() - t0), loadMs };
+  if (missing && loads === l) loads = null; // some tiles failed: the retry downloads them again
+  return { id: req.id, ok: true, stretches, samples: count, missing, ms: Math.round(performance.now() - Math.min(t0, l.t0)), loadMs, parts, partial: !s2Done };
 }
 
 async function probe(req: ProbeRequest): Promise<ProbeReply> {
@@ -195,7 +237,11 @@ async function probe(req: ProbeRequest): Promise<ProbeReply> {
   return { id: req.id, ok: true, result, inputs: { ...site, terrain: { ...terrain, horizon: [...terrain.horizon] } } };
 }
 
-self.onmessage = (e: MessageEvent<RunRequest | ProbeRequest>) => {
+self.onmessage = (e: MessageEvent<RunRequest | ProbeRequest | PrefetchRequest>) => {
+  if ('kind' in e.data && e.data.kind === 'prefetch') {
+    startLoads(e.data.box, e.data.trails);
+    return;
+  }
   if ('kind' in e.data && e.data.kind === 'probe') {
     const req = e.data;
     probe(req).then(
