@@ -42,20 +42,6 @@ export const BASES: {
     vector: true,
   },
   {
-    name: 'Trails',
-    note: 'CyclOSM. Muted roads, trails stand out.',
-    url: 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
-    attribution: `${OSM_ATTR} | <a href="https://www.cyclosm.org">CyclOSM</a>`,
-    maxNativeZoom: 19,
-  },
-  {
-    name: 'Light',
-    note: 'Esri World Topo. Clean and quiet, like Google Maps terrain. No trails.',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-    attribution: `${ESRI_ATTR}, HERE, Garmin, USGS, NGA, EPA, NPS`,
-    maxNativeZoom: 19,
-  },
-  {
     name: 'Topo',
     note: 'OpenTopoMap. Contours and hill shading, trails shown.',
     url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -85,6 +71,20 @@ export const BASES: {
     maxNativeZoom: 19,
   },
 ];
+
+/** "40.78912, -111.85213": five decimals is about a metre. */
+export const coordText = (lat: number, lon: number) => `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+
+/** Coordinates that copy to the clipboard when tapped. */
+function copyCoords(btn: HTMLElement, text: string) {
+  void navigator.clipboard?.writeText(text).then(
+    () => {
+      btn.dataset.copied = '1';
+      window.setTimeout(() => delete btn.dataset.copied, 1500);
+    },
+    () => {},
+  );
+}
 
 const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name : 'Outdoors');
 
@@ -226,7 +226,15 @@ function Controller({
         const canReport = Boolean(vector.current);
         // An element (not an HTML string) so the report buttons keep their handlers.
         const content = L.DomUtil.create('div');
-        content.innerHTML = conditionHtml(stretch) + nearbyReportsHtml(stretch) + (canReport ? reportHtml() : '');
+        const here = coordText(lat, lng);
+        content.innerHTML =
+          conditionHtml(stretch) +
+          `<button type="button" class="coords" title="Copy coordinates">${here}</button>` +
+          nearbyReportsHtml(stretch) +
+          (canReport ? reportHtml() : '');
+        const coordBtn = content.querySelector<HTMLElement>('.coords')!;
+        coordBtn.addEventListener('click', () => copyCoords(coordBtn, here));
+        L.DomEvent.disableClickPropagation(coordBtn);
         if (canReport) {
           L.DomEvent.disableClickPropagation(content);
           wireReport(content, { lat: e.latlng.lat, lon: e.latlng.lng }, stretch, vector.current!);
@@ -467,6 +475,14 @@ export default function MapView({
           </button>
           <button type="button" className="map-confirm-x" onClick={() => setTapped(null)} aria-label="Cancel">
             ✕
+          </button>
+          <button
+            type="button"
+            className="coords map-confirm-coords"
+            title="Copy coordinates"
+            onClick={(e) => copyCoords(e.currentTarget, coordText(tapped.lat, tapped.lon))}
+          >
+            {coordText(tapped.lat, tapped.lon)}
           </button>
         </div>
       )}

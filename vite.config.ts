@@ -43,7 +43,6 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           tiles('map-tiles', /^https:\/\/([abc]\.tile\.opentopomap\.org|basemap\.nationalmap\.gov)\//, 1500),
-          tiles('trail-tiles', /^https:\/\/[abc]\.tile-cyclosm\.openstreetmap\.fr\//, 1500),
           tiles('esri-tiles', /^https:\/\/server\.arcgisonline\.com\//, 1000),
           // Outdoors style: vector tiles, fonts and icons from OpenFreeMap.
           tiles('openfreemap', /^https:\/\/tiles\.openfreemap\.org\//, 3000),

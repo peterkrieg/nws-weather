@@ -102,7 +102,7 @@ export const normalizePrefs = (p: Partial<Prefs> | null): Prefs => ({
   strip: p?.strip ?? true,
   // Before prefs existed the map kept its own setting.
   // "Street" (standard OpenStreetMap) was retired in favour of Outdoors.
-  basemap: ((b) => (!b || b === 'Street' ? 'Outdoors' : b))(p?.basemap ?? legacyBasemap()),
+  basemap: ((b) => (!b || ['Street', 'Trails', 'Light'].includes(b) ? 'Outdoors' : b))(p?.basemap ?? legacyBasemap()), // Street, Trails and Light were retired
   mtbRatings: p?.mtbRatings ?? false,
   trailConditions: p?.trailConditions ?? true,
   // The map used to keep this one itself.

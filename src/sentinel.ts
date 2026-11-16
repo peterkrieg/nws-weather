@@ -305,7 +305,7 @@ export const SentinelLayer = L.GridLayer.extend({
 
   createTile(this: SatLayer & { _until: number | null; _used: Map<TileKey, number[]>; _pending: number; _emit(): void; _tileCoordsToKey(c: L.Coords): string; _map: L.Map }, coords: L.Coords, done: L.DoneCallback) {
     const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 256;
+    canvas.width = canvas.height = 256; // drawTile sizes it for the screen
     if (coords.z < MIN_ZOOM) {
       queueMicrotask(() => done(undefined, canvas));
       return canvas;
@@ -335,24 +335,30 @@ const tile2lat = (y: number, z: number) => {
 };
 
 const G = 16; // UTM is worked out exactly on a 17×17 grid and interpolated in between
+/** Canvas pixels per CSS pixel: sharp on phone screens without 9× the work at 3×. */
+const DPR = typeof window === 'undefined' ? 1 : Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
 
 /** Draws one map tile; returns the pass days it used. */
 async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | null): Promise<number[]> {
+  const S = 256 * DPR;
+  canvas.width = canvas.height = S;
   const west = tile2lon(c.x, c.z);
   const east = tile2lon(c.x + 1, c.z);
   const north = tile2lat(c.y, c.z);
   const south = tile2lat(c.y + 1, c.z);
   const all = await scenesIn(south, west, north, east);
   const scenes = all.filter((s) => until == null || dayKey(s.at) <= until);
-  const N = 256 * 256;
+  const N = S * S;
   const out = new Uint8ClampedArray(N * 4);
   const left = new Uint8Array(N).fill(1); // 1 = still needs a clear pixel
   let remaining = N;
   const fallback = new Uint8Array(N); // 1 = a cloudy pixel was drawn as a stand-in
   const used = new Set<number>();
-  // Overview level for this zoom: the coarsest whose pixels are no bigger than the screen's.
-  const metres = (40075016.686 * Math.cos((((north + south) / 2) * Math.PI) / 180)) / (256 * 2 ** c.z);
-  const lv = Math.max(0, Math.min(4, Math.floor(Math.log2(metres / 10) + 0.25)));
+  // Picture level for this zoom: the coarsest whose pixels are no bigger than the device's pixels.
+  const metres = (40075016.686 * Math.cos((((north + south) / 2) * Math.PI) / 180)) / (S * 2 ** c.z);
+  const lv = Math.max(0, Math.min(4, Math.floor(Math.log2(metres / 10))));
+  // Zoomed in past 10 m pixels: blend neighbours instead of drawing blocks.
+  const smooth = metres < 7;
   const grids = new Map<number, Float64Array>();
   const utmGrid = (zone: number) => {
     let g = grids.get(zone);
@@ -369,26 +375,30 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
     return g;
   };
 
+  // Per pixel: colour tile index, fractional row/col inside it (for blending), classification index.
+  const rTile = new Int32Array(N);
+  const rRow = new Float32Array(N);
+  const rCol = new Float32Array(N);
+  const cIdx = new Int32Array(N);
   let tried = 0;
   for (const s of scenes) {
     if (!remaining || tried >= MAX_SCENES) break;
     if (s.bbox[0] > east || s.bbox[2] < west || s.bbox[1] > north || s.bbox[3] < south) continue;
     tried++;
-    const zone = s.epsg % 100;
-    const g = utmGrid(zone);
+    const g = utmGrid(s.epsg % 100);
     const [rgb, cls] = await Promise.all([Raster.open(s.tci.href, s.tci.transform, s.tci.shape[1], lv), Raster.open(s.href, s.transform, s.shape[1], Math.max(0, lv - 1))]);
-    // Source position of every pixel still needed, and the tiles that covers.
-    const pos = new Int32Array(N * 2).fill(-1);
+    const { tileW, tileH } = rgb.ifd;
+    rTile.fill(-1);
     const need = new Set<number>();
     const needCls = new Set<number>();
-    for (let py = 0; py < 256; py++) {
-      const fy = (py + 0.5) / (256 / G);
+    for (let py = 0; py < S; py++) {
+      const fy = (py + 0.5) / (S / G);
       const j = Math.min(G - 1, Math.floor(fy));
       const ty = fy - j;
-      for (let px = 0; px < 256; px++) {
-        const p = py * 256 + px;
+      for (let px = 0; px < S; px++) {
+        const p = py * S + px;
         if (!left[p]) continue;
-        const fx = (px + 0.5) / (256 / G);
+        const fx = (px + 0.5) / (S / G);
         const i = Math.min(G - 1, Math.floor(fx));
         const tx = fx - i;
         const a = (j * (G + 1) + i) * 2;
@@ -400,10 +410,15 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
         const rc = rgb.index(x, y);
         const cc = cls.index(x, y);
         if (!rc || !cc) continue;
-        pos[p * 2] = rgb.tileIndex(rc[0], rc[1]) * 1048576 + (rc[0] % rgb.ifd.tileH) * rgb.ifd.tileW + (rc[1] % rgb.ifd.tileW);
-        pos[p * 2 + 1] = cls.tileIndex(cc[0], cc[1]) * 1048576 + (cc[0] % cls.ifd.tileH) * cls.ifd.tileW + (cc[1] % cls.ifd.tileW);
-        need.add(rgb.tileIndex(rc[0], rc[1]));
-        needCls.add(cls.tileIndex(cc[0], cc[1]));
+        const t = rgb.tileIndex(rc[0], rc[1]);
+        rTile[p] = t;
+        // Pixel centres sit at +0.5; blending reads the four around the exact position.
+        rRow[p] = smooth ? (rgb.y0 - y) / rgb.res - 0.5 - Math.floor(rc[0] / tileH) * tileH : rc[0] % tileH;
+        rCol[p] = smooth ? (x - rgb.x0) / rgb.res - 0.5 - Math.floor(rc[1] / tileW) * tileW : rc[1] % tileW;
+        const ct = cls.tileIndex(cc[0], cc[1]);
+        cIdx[p] = ct * 1048576 + (cc[0] % cls.ifd.tileH) * cls.ifd.tileW + (cc[1] % cls.ifd.tileW);
+        need.add(t);
+        needCls.add(ct);
       }
     }
     if (!need.size) continue;
@@ -413,26 +428,55 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
     const clear = new Uint8Array(N);
     const wanted = new Set<number>();
     for (let p = 0; p < N; p++) {
-      if (pos[p * 2] < 0) continue;
-      const ci = pos[p * 2 + 1];
-      const ct = clsTiles.get(Math.floor(ci / 1048576));
-      const k = ct ? ct[ci % 1048576] : 0;
+      if (rTile[p] < 0) continue;
+      const ct = clsTiles.get(Math.floor(cIdx[p] / 1048576));
+      const k = ct ? ct[cIdx[p] % 1048576] : 0;
       if (ct && !HIDDEN.has(k)) clear[p] = 1;
       // Cloudy pixels still get a colour tile when nothing has been drawn there yet (stand-in).
-      if (clear[p] || (ct && k !== 0 && !fallback[p])) wanted.add(Math.floor(pos[p * 2] / 1048576));
+      if (clear[p] || (ct && k !== 0 && !fallback[p])) wanted.add(rTile[p]);
     }
     const rgbTiles = new Map<number, Uint8Array | null>();
     await Promise.all([...wanted].map(async (t) => rgbTiles.set(t, await rgb.load(t))));
     let drew = false;
     for (let p = 0; p < N; p++) {
-      if (pos[p * 2] < 0) continue;
-      const ri = pos[p * 2];
-      const rt = rgbTiles.get(Math.floor(ri / 1048576));
+      if (rTile[p] < 0) continue;
+      const rt = rgbTiles.get(rTile[p]);
       if (!rt) continue;
-      const o = (ri % 1048576) * 3;
-      const r = rt[o];
-      const gg = rt[o + 1];
-      const bb = rt[o + 2];
+      let r: number;
+      let gg: number;
+      let bb: number;
+      if (smooth) {
+        // Bilinear within the tile (clamped at its edges; seams every 10 km are invisible).
+        const fr = Math.min(tileH - 1, Math.max(0, rRow[p]));
+        const fc = Math.min(tileW - 1, Math.max(0, rCol[p]));
+        const r0 = Math.floor(fr);
+        const c0 = Math.floor(fc);
+        const r1 = Math.min(tileH - 1, r0 + 1);
+        const c1 = Math.min(tileW - 1, c0 + 1);
+        const wy = fr - r0;
+        const wx = fc - c0;
+        const o00 = (r0 * tileW + c0) * 3;
+        const o01 = (r0 * tileW + c1) * 3;
+        const o10 = (r1 * tileW + c0) * 3;
+        const o11 = (r1 * tileW + c1) * 3;
+        // A no-data neighbour (0,0,0 at the swath edge) would darken the blend: use the nearest.
+        if (!(rt[o00] | rt[o00 + 1] | rt[o00 + 2]) || !(rt[o01] | rt[o01 + 1] | rt[o01 + 2]) || !(rt[o10] | rt[o10 + 1] | rt[o10 + 2]) || !(rt[o11] | rt[o11 + 1] | rt[o11 + 2])) {
+          const o = (Math.round(fr) * tileW + Math.round(fc)) * 3;
+          r = rt[o];
+          gg = rt[o + 1];
+          bb = rt[o + 2];
+        } else {
+          const mix = (k: number) => (rt[o00 + k] * (1 - wx) + rt[o01 + k] * wx) * (1 - wy) + (rt[o10 + k] * (1 - wx) + rt[o11 + k] * wx) * wy;
+          r = mix(0);
+          gg = mix(1);
+          bb = mix(2);
+        }
+      } else {
+        const o = (rRow[p] * tileW + rCol[p]) * 3;
+        r = rt[o];
+        gg = rt[o + 1];
+        bb = rt[o + 2];
+      }
       if (!r && !gg && !bb) continue; // outside the swath
       if (clear[p] || !fallback[p]) {
         out[p * 4] = r;
@@ -448,6 +492,6 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
     }
     if (drew) used.add(dayKey(s.at));
   }
-  canvas.getContext('2d')!.putImageData(new ImageData(out, 256, 256), 0, 0);
+  canvas.getContext('2d')!.putImageData(new ImageData(out, S, S), 0, 0);
   return [...used].sort((a, b) => b - a);
 }

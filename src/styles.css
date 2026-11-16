@@ -318,6 +318,9 @@ body.map-full .sec-map .map { min-height: 0; }
 body.map-full .map-hint { bottom: calc(22px + env(safe-area-inset-bottom)); }
 body.map-full .leaflet-top { top: env(safe-area-inset-top); }
 body.map-full .leaflet-right { right: env(safe-area-inset-right); }
+/* The opened layer list covers Done (both sit at the top), not the other way round. */
+.leaflet-top.leaflet-right { z-index: 1001; }
+.map-card:has(.leaflet-control-layers-expanded) .map-full-btn.is-full { visibility: hidden; }
 body.map-full .map-confirm { top: calc(60px + env(safe-area-inset-top)); }
 body.map-full .aq-legend { bottom: calc(44px + env(safe-area-inset-bottom)); }
 /* Finger-sized map controls on touch screens. */
@@ -342,9 +345,13 @@ body.map-full .aq-legend { bottom: calc(44px + env(safe-area-inset-bottom)); }
   transform: translateX(-50%);
   z-index: 1000;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 6px;
+  width: max-content;
+  max-width: calc(100% - 20px);
 }
-.map-confirm button {
+.map-confirm > button:not(.coords) {
   font: inherit;
   font-size: 15px;
   font-weight: 600;
@@ -674,3 +681,21 @@ footer a { color: inherit; }
 .sat-date-tag { margin-left: 6px; font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .sat-date-note { color: var(--muted); padding: 0 4px; line-height: 1.35; }
 body.map-full .sat-date { bottom: calc(44px + env(safe-area-inset-bottom)); }
+
+/* ---------- coordinates (tap to copy) ---------- */
+.coords {
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.coords::after { content: ' ⧉'; color: var(--muted); }
+.coords[data-copied]::after { content: ' ✓ copied'; color: #2f9e44; }
+.map-confirm-coords { flex-basis: 100%; flex-grow: 0; margin: 0 auto; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25); max-width: max-content; }
+.cond-popup .coords { display: block; margin: 6px 0 2px; }
