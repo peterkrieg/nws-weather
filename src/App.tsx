@@ -7,8 +7,9 @@ import { Alerts, Daily, Hero } from './Forecast';
 import Hourly from './Hourly';
 import Settings from './Settings';
 import { FavoriteEditor, FavoritesBar, FavoriteStar } from './Favorites';
-import { readJson, samePlace, savedForecast, saveForecast, useFavorites, usePrefs, writeJson, type Favorite, type SectionId } from './store';
+import { readJson, samePlace, savedForecast, saveForecast, useFavorites, usePrefs, writeJson, type Favorite, type Prefs, type SectionId } from './store';
 import { usePullToRefresh, Updated, UpdatePrompt } from './Pwa';
+import { legacyHash, readUrl, writeUrl, type MapPos } from './urlState';
 
 const LAST_KEY = 'wx:last';
 const TOUCH = window.matchMedia('(pointer: coarse)').matches;
@@ -22,18 +23,12 @@ function trimPast(wx: Weather): Weather {
 }
 const RECENTS_KEY = 'wx:recents';
 
-/** URL hash is "#lat,lon" or "#lat,lon,Label" so a location can be bookmarked or shared. */
-function parseHash(): Loc | null {
-  const [la, lo, ...rest] = decodeURIComponent(location.hash.slice(1)).split(',');
-  const lat = Number(la);
-  const lon = Number(lo);
-  if (!la || !lo || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  return { lat, lon, label: rest.join(',') || undefined, source: 'url' };
-}
+/** What the address bar asked for at launch (a shared link, a bookmark); see urlState. */
+const LINK = readUrl();
 
 function initialLoc(): Loc | null {
-  const fromHash = parseHash();
-  if (fromHash) return fromHash;
+  // With a map position in the link, the map opens there rather than centring on the spot.
+  if (LINK.loc) return { ...LINK.loc, label: LINK.name ?? undefined, source: LINK.map ? 'map' : 'url' };
   const last = readJson<Loc | null>(LAST_KEY, null);
   return last && Number.isFinite(last.lat) && Number.isFinite(last.lon) ? { ...last, source: 'url' } : null;
 }
@@ -52,16 +47,57 @@ export default function App() {
   const [fetchedAt, setFetchedAt] = useState(0);
   const [offline, setOffline] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [view, setView] = useState<MapPos | null>(LINK.map);
+  // Map settings from a shared link apply while viewing it, without replacing the viewer's own saved
+  // preferences; changing one yourself saves it as usual and drops the link's value.
+  const [linked, setLinked] = useState({ basemap: LINK.style, mtbRatings: LINK.bikes, trailConditions: LINK.mud, airQuality: LINK.aq });
+  const mapPref = <K extends keyof typeof linked>(k: K) => (linked[k] ?? prefs[k]) as NonNullable<(typeof linked)[K]>;
+  const basemap = mapPref('basemap');
+  const mtbRatings = mapPref('mtbRatings');
+  const trailConditions = mapPref('trailConditions');
+  const airQuality = mapPref('airQuality');
+  const setMapPref = <K extends keyof typeof linked>(k: K, v: NonNullable<(typeof linked)[K]>) => {
+    setLinked((l) => ({ ...l, [k]: null }));
+    setPrefs((p) => ({ ...p, [k]: v }));
+  };
+  // Layout settings see the map settings in effect, and save only what's actually changed there.
+  const shownPrefs: Prefs = { ...prefs, basemap, mtbRatings, trailConditions, airQuality };
+  const setShownPrefs = (next: Prefs) => {
+    const keep = { ...next };
+    for (const k of Object.keys(linked) as (keyof typeof linked)[]) {
+      if (next[k] !== shownPrefs[k]) setLinked((l) => ({ ...l, [k]: null }));
+      else (keep as Record<string, unknown>)[k] = prefs[k];
+    }
+    setPrefs(keep);
+  };
   const wxPlaceRef = useRef<{ lat: number; lon: number } | null>(null);
   const fetchedAtRef = useRef(0);
   fetchedAtRef.current = fetchedAt;
 
-  // Elevation and the URL follow the location.
+  // The address bar mirrors the view, so copying it shares exactly this.
+  const urlState = {
+    loc: loc ? { lat: loc.lat, lon: loc.lon } : null,
+    name: loc?.label ?? null,
+    map: view,
+    style: basemap,
+    bikes: mtbRatings,
+    mud: trailConditions,
+    aq: airQuality,
+  };
+  const urlRef = useRef(urlState);
+  urlRef.current = urlState;
+  useEffect(() => writeUrl(urlRef.current), [loc, view, basemap, mtbRatings, trailConditions, airQuality]);
+  // Back out of the full-screen map restores the URL from before it: write the current view again.
+  useEffect(() => {
+    const onPop = () => writeUrl(urlRef.current);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  // Elevation follows the location.
   useEffect(() => {
     if (!loc) return;
     let cancelled = false;
-    const hash = [loc.lat.toFixed(4), loc.lon.toFixed(4), ...(loc.label ? [encodeURIComponent(loc.label)] : [])].join(',');
-    history.replaceState(null, '', `#${hash}`);
     setPointElevFt(undefined);
     fetchElevation(loc.lat, loc.lon).then((ft) => {
       if (!cancelled) setPointElevFt(ft);
@@ -140,11 +176,11 @@ export default function App() {
 
   usePullToRefresh(refresh);
 
-  // Follow hash changes made outside the app (pasting a link into the address bar, back/forward).
+  // An old-style "#lat,lon" link pasted into the address bar of an open tab.
   useEffect(() => {
     const onHash = () => {
-      const next = parseHash();
-      if (next) setLoc(next);
+      const old = legacyHash();
+      if (old) setLoc({ ...old, source: 'url' });
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -242,11 +278,19 @@ export default function App() {
     ),
     map: (
       <section key="map" className={cls('map', 'card map-card')}>
-        <MapView loc={loc} onPick={(lat, lon) => pickPoint(lat, lon, 'map')} basemap={prefs.basemap} onBasemap={(basemap) => setPrefs((p) => ({ ...p, basemap }))}
-          mtbRatings={prefs.mtbRatings}
-          onMtbRatings={(mtbRatings) => setPrefs((p) => ({ ...p, mtbRatings }))}
-          conditions={prefs.trailConditions}
-          onConditions={(trailConditions) => setPrefs((p) => ({ ...p, trailConditions }))}
+        <MapView
+          loc={loc}
+          onPick={(lat, lon) => pickPoint(lat, lon, 'map')}
+          basemap={basemap}
+          onBasemap={(v) => setMapPref('basemap', v)}
+          mtbRatings={mtbRatings}
+          onMtbRatings={(v) => setMapPref('mtbRatings', v)}
+          conditions={trailConditions}
+          onConditions={(v) => setMapPref('trailConditions', v)}
+          aq={airQuality}
+          onAq={(v) => setMapPref('airQuality', v)}
+          initialView={LINK.map}
+          onView={setView}
         />
         <p className="map-hint">{TOUCH ? 'Tap the map to check a spot' : "Click the map for that spot's forecast"}</p>
       </section>
@@ -297,7 +341,7 @@ export default function App() {
       </main>
 
       <UpdatePrompt />
-      <Settings opened={settingsOpen} onClose={() => setSettingsOpen(false)} prefs={prefs} setPrefs={setPrefs} />
+      <Settings opened={settingsOpen} onClose={() => setSettingsOpen(false)} prefs={shownPrefs} setPrefs={setShownPrefs} />
       <FavoriteEditor
         fav={editing}
         onSave={saveFavorite}

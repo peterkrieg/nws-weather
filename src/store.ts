@@ -80,12 +80,14 @@ export interface Prefs {
   mtbRatings: boolean;
   /** Outdoors map: estimate and highlight muddy / snowy trail stretches. */
   trailConditions: boolean;
+  /** Air quality sensors overlay on the map. */
+  airQuality: boolean;
 }
 
 const defaults = <Id extends string>(labels: Record<Id, string>): Item<Id>[] =>
   (Object.keys(labels) as Id[]).map((id) => ({ id, on: true }));
 
-export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Outdoors', mtbRatings: false, trailConditions: true });
+export const defaultPrefs = (): Prefs => ({ sections: defaults(SECTIONS), charts: defaults(CHARTS), strip: true, basemap: 'Outdoors', mtbRatings: false, trailConditions: true, airQuality: false });
 
 /** Keep saved order, drop ids that no longer exist, append ones added since. */
 function reconcile<Id extends string>(saved: Item<Id>[] | undefined, labels: Record<Id, string>): Item<Id>[] {
@@ -103,7 +105,17 @@ export const normalizePrefs = (p: Partial<Prefs> | null): Prefs => ({
   basemap: ((b) => (!b || b === 'Street' ? 'Outdoors' : b))(p?.basemap ?? legacyBasemap()),
   mtbRatings: p?.mtbRatings ?? false,
   trailConditions: p?.trailConditions ?? true,
+  // The map used to keep this one itself.
+  airQuality: p?.airQuality ?? legacyFlag('wx:aq'),
 });
+
+function legacyFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function legacyBasemap(): string | null {
   try {

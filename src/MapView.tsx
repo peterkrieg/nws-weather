@@ -7,8 +7,8 @@ import { AQ_LAYER, AirQualityLayer } from './AirQuality';
 import MtbLegend from './MtbLegend';
 import { conditionHtml } from './conditionText';
 import type { ConditionsStatus, Stretch } from './vectorMap';
+import type { MapPos } from './urlState';
 
-const AQ_KEY = 'wx:aq';
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
 const TOUCH = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
@@ -165,21 +165,6 @@ const MtbToggle = createLayerComponent<L.LayerGroup, object>((_p, ctx) => create
 export const COND_LAYER = 'Trail conditions';
 const CondToggle = createLayerComponent<L.LayerGroup, object>((_p, ctx) => createElementObject(L.layerGroup(), ctx));
 
-function save(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* ignore */
-  }
-}
-
-function aqSaved() {
-  try {
-    return localStorage.getItem(AQ_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
 
 function Controller({
   loc,
@@ -188,6 +173,8 @@ function Controller({
   onBase,
   onMtb,
   onCond,
+  onAq,
+  onView,
   vector,
 }: {
   loc: Loc | null;
@@ -196,6 +183,8 @@ function Controller({
   onBase: (name: string) => void;
   onMtb: (on: boolean) => void;
   onCond: (on: boolean) => void;
+  onAq: (on: boolean) => void;
+  onView: (v: MapPos) => void;
   vector: React.RefObject<Lazy | null>;
 }) {
   const map = useMap();
@@ -214,22 +203,36 @@ function Controller({
       else onPick(lat, lng);
     },
     overlayadd: (e) => {
-      if (e.name === AQ_LAYER) save(AQ_KEY, '1');
+      if (e.name === AQ_LAYER) onAq(true);
       if (e.name === MTB_LAYER) onMtb(true);
       if (e.name === COND_LAYER) onCond(true);
     },
     overlayremove: (e) => {
-      if (e.name === AQ_LAYER) save(AQ_KEY, '0');
+      if (e.name === AQ_LAYER) onAq(false);
       if (e.name === MTB_LAYER) onMtb(false);
       if (e.name === COND_LAYER) onCond(false);
     },
     baselayerchange: (e) => onBase(e.name),
+    // Pans and zooms go into the address bar (see urlState).
+    moveend: () => {
+      const c = map.getCenter().wrap();
+      onView({ z: map.getZoom(), lat: c.lat, lon: c.lng });
+    },
   });
 
   // Recenter for searches / saved locations, but leave the view alone when the user clicked the map.
   useEffect(() => {
     if (loc && loc.source !== 'map') map.setView([loc.lat, loc.lon], Math.max(map.getZoom(), 12));
   }, [loc, map]);
+
+  // Record the opening view too, so a link copied before touching the map still opens it the same.
+  useEffect(() => {
+    const report = () => {
+      const c = map.getCenter().wrap();
+      onView({ z: map.getZoom(), lat: c.lat, lon: c.lng });
+    };
+    map.whenReady(report);
+  }, [map]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The card grows and shrinks with the forecast column next to it.
   useEffect(() => {
@@ -328,6 +331,10 @@ export default function MapView({
   onMtbRatings,
   conditions,
   onConditions,
+  aq,
+  onAq,
+  initialView,
+  onView,
 }: {
   loc: Loc | null;
   onPick: (lat: number, lon: number) => void;
@@ -337,6 +344,11 @@ export default function MapView({
   onMtbRatings: (on: boolean) => void;
   conditions: boolean;
   onConditions: (on: boolean) => void;
+  aq: boolean;
+  onAq: (on: boolean) => void;
+  /** Zoom and centre from a shared link; otherwise the map centres on the forecast spot. */
+  initialView: MapPos | null;
+  onView: (v: MapPos) => void;
 }) {
   const base = validBase(basemap);
   // The layer switch only reads `checked` when it mounts. A change made in the map's own switch is
@@ -357,15 +369,14 @@ export default function MapView({
   const condToggle = useRef<L.LayerGroup>(null);
   const vector = useRef<Lazy>(null);
   const [condStatus, setCondStatus] = useState<ConditionsStatus>({ state: 'off' });
-  const aqOn = aqSaved();
   const [tapped, setTapped] = useState<{ lat: number; lon: number } | null>(null);
   const [full, setFull] = useState(false);
   useEffect(() => setTapped(null), [loc]);
   return (
     <MapContainer
       className="map"
-      center={loc ? [loc.lat, loc.lon] : [39.5, -98.35]}
-      zoom={loc ? 12 : 4}
+      center={initialView ? [initialView.lat, initialView.lon] : loc ? [loc.lat, loc.lon] : [39.5, -98.35]}
+      zoom={initialView ? initialView.z : loc ? 12 : 4}
       maxZoom={18}
       worldCopyJump
       dragging={!TOUCH}
@@ -381,8 +392,8 @@ export default function MapView({
             )}
           </LayersControl.BaseLayer>
         ))}
-        <LayersControl.Overlay name={AQ_LAYER} checked={aqOn}>
-          <AirQualityLayer initialOn={aqOn} />
+        <LayersControl.Overlay name={AQ_LAYER} checked={aq}>
+          <AirQualityLayer initialOn={aq} />
         </LayersControl.Overlay>
         {base === 'Outdoors' && (
           <LayersControl.Overlay name={COND_LAYER} checked={conditions}>
@@ -417,7 +428,7 @@ export default function MapView({
       )}
       <TwoFingerHint disabled={full} />
       <FullScreen full={full} setFull={setFull} />
-      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} onCond={onConditions} vector={vector} />
+      <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} onCond={onConditions} onAq={onAq} onView={onView} vector={vector} />
       <OverlaySync toggle={mtbToggle} on={mtbRatings} />
       <OverlaySync toggle={condToggle} on={conditions} />
     </MapContainer>
