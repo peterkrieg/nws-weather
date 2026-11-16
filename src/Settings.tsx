@@ -197,8 +197,8 @@ function ReporterKey() {
       <h3 className="set-head">Trail reports</h3>
       <PasswordInput
         size="xs"
-        label="Reporter key"
-        description="Lets you add “How was it?” reports and see recent ones. Reload after saving."
+        label="Trusted reporter key"
+        description="Optional. Marks your reports as trusted (they count for more). Reload after saving."
         value={value}
         onChange={(e) => {
           setValue(e.currentTarget.value);

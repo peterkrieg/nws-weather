@@ -100,8 +100,13 @@ export interface Result {
 }
 
 const LAPSE = 0.0065;
-/** Ice on the surface (mm of water) that counts as icy: more than a skim on a puddle. */
-const ICY_MM = 2;
+/**
+ * The settings scripts/fit-model.mts tunes against weighted trail reports.
+ * tacky/damp/muddy: wetness thresholds; drain: multiplier on soil drainage; seep: share of
+ * collected water released per hour; icyMm: surface ice (mm of water) that counts as icy, more than
+ * a skim on a puddle.
+ */
+export const TUNE = { tacky: 0.28, damp: 0.45, muddy: 0.62, drain: 1, seep: 0.04, icyMm: 2 };
 
 /**
  * Ground heat constants, fitted to SNOTEL 2" soil temperatures (scripts/fit-ground.mts).
@@ -189,7 +194,6 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
   // Water seeping in from the slope above: collecting spots get part of their extra water late,
   // released over a day or two after the rain stops (lateral flow through the hillside).
   let seep = 0;
-  const SEEP_RATE = 0.04;
 
   // Temperature here: the model's, moved to this elevation, corrected by measured stations.
   const fix = wx.tempFix;
@@ -375,12 +379,12 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
     }
     const extra = Math.max(0, runon - 1) * input;
     seep += extra * 0.5;
-    const release = seep * SEEP_RATE;
+    const release = seep * TUNE.seep;
     seep -= release;
     w = Math.min(cap * 1.3, w + input * Math.min(runon, 1) + extra * 0.5 + release);
 
     // --- Water out: frozen ground below stops water soaking away (thawed mud over frost is the worst).
-    const drainNow = frozenTop ? 0 : deepFrozen ? drain * 0.15 : drain;
+    const drainNow = (frozenTop ? 0 : deepFrozen ? drain * 0.15 : drain) * TUNE.drain;
     w -= drainNow * Math.max(0, w - fieldCap);
     const radEvap = (rs * 0.6 * 3600) / 2.45e6; // mm/h if all absorbed sun went into evaporation
     const airEvap = 0.05 * vpd(temp, wx.rh[i]) * (1 + 0.5 * wx.wind[i]) * (1 - 0.4 * canopy);
@@ -393,9 +397,9 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
     let state: State;
     // Refrozen snow: a thin layer (≲2") is basically ice; thicker, it's a crust over snow.
     if (snowCover) state = refrozen && swe < 12 ? 'icy' : !refrozen && (sinceSnow < 18 || swe > 40) ? 'soft_snow' : 'packed_snow';
-    else if (ice > ICY_MM) state = 'icy';
-    else if (frozenTop) state = wet > 0.28 ? 'frozen' : 'dry';
-    else state = wet >= 0.62 ? 'muddy' : wet >= 0.45 ? 'damp' : wet >= 0.28 ? 'tacky' : 'dry';
+    else if (ice > TUNE.icyMm) state = 'icy';
+    else if (frozenTop) state = wet > TUNE.tacky ? 'frozen' : 'dry';
+    else state = wet >= TUNE.muddy ? 'muddy' : wet >= TUNE.damp ? 'damp' : wet >= TUNE.tacky ? 'tacky' : 'dry';
 
     if (!atTarget && tEnd >= targetSec) {
       atTarget = {
@@ -421,7 +425,7 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
           ice,
           refrozen,
           hoursSinceSnow: Number.isFinite(sinceSnow) ? sinceSnow : null,
-          under: snowCover ? (frozenTop ? 'frozen' : wet >= 0.62 ? 'mud' : 'firm') : null,
+          under: snowCover ? (frozenTop ? 'frozen' : wet >= TUNE.muddy ? 'mud' : 'firm') : null,
           measured: wx.measured,
           seen: seen && seen.at >= wx.t[i0] - 3600 && seen.at <= targetSec ? seen : null,
         },

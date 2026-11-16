@@ -635,3 +635,7 @@ footer a { color: inherit; }
 .rep-msg .rep-undo { padding: 1px 8px; min-height: 0; margin-left: 4px; }
 .rep-pop { font-size: 12px; line-height: 1.4; }
 .rep-pop .muted { color: #888; }
+.cond-reports { margin-top: 8px; padding: 6px 8px; background: #f4f1ea; border-radius: 6px; font-size: 12px; line-height: 1.5; }
+.cond-reports i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 3px 0 2px; }
+.cond-reports .muted, .rep-pop .muted { color: #888; }
+.rep-pop .rep-del { margin-top: 6px; font: inherit; font-size: 12px; border: 1px solid #d0d0d0; background: #fff; border-radius: 999px; padding: 3px 9px; cursor: pointer; }

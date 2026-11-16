@@ -9,8 +9,7 @@ import { conditionHtml } from './conditionText';
 import type { ConditionsStatus, Stretch } from './vectorMap';
 import type { MapPos } from './urlState';
 import type { TrailConditions } from './conditions/client';
-import { reportHtml, wireReport } from './reportForm';
-import { reporterKey } from './reporter';
+import { nearbyReportsHtml, reportHtml, wireReport } from './reportForm';
 import ReportsLayer from './ReportsLayer';
 
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
@@ -204,10 +203,10 @@ function Controller({
       const stretch = vector.current?.stretchAt(e.latlng.lat, e.latlng.lng);
       if (stretch) {
         // Narrow, and panned clear of the zoom/layer buttons and the legend chip.
-        const canReport = Boolean(reporterKey() && vector.current);
+        const canReport = Boolean(vector.current);
         // An element (not an HTML string) so the report buttons keep their handlers.
         const content = L.DomUtil.create('div');
-        content.innerHTML = conditionHtml(stretch) + (canReport ? reportHtml() : '');
+        content.innerHTML = conditionHtml(stretch) + nearbyReportsHtml(stretch) + (canReport ? reportHtml() : '');
         if (canReport) {
           L.DomEvent.disableClickPropagation(content);
           wireReport(content, { lat: e.latlng.lat, lon: e.latlng.lng }, stretch, vector.current!);
@@ -446,7 +445,7 @@ export default function MapView({
           </button>
         </div>
       )}
-      {reporterKey() && <ReportsLayer />}
+      <ReportsLayer />
       <TwoFingerHint disabled={full} />
       <FullScreen full={full} setFull={setFull} />
       <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} onCond={onConditions} onAq={onAq} onView={onView} vector={vector} />

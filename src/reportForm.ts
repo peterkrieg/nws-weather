@@ -4,7 +4,7 @@
 
 import type { Stretch } from './conditions/worker';
 import type { TrailConditions } from './conditions/client';
-import { REPORTS_CHANGED, reportsApi } from './reporter';
+import { REPORTS_CHANGED, recentReports, reportsApi } from './reporter';
 
 export const REPORT_STATES = [
   ['dry', 'Dry', '#adb5bd'],
@@ -113,4 +113,29 @@ export function sameCall(reported: string, model: string) {
   const group = (s: string) =>
     ({ dry: 'good', tacky: 'good', damp: 'damp', muddy: 'mud', frozen: 'frozen', icy: 'ice', packed_snow: 'snow', soft_snow: 'snow', snow: 'snow' })[s] ?? s;
   return group(reported) === group(model);
+}
+
+/**
+ * Recent reports along this stretch (within ~40 m, last 24 h), summarised: "Muddy ×2 · Damp ×1".
+ * Newer and trusted reports count for more; one report is shown as one report, not a verdict.
+ */
+export function nearbyReportsHtml(stretch: Stretch): string {
+  const now = Date.now() / 1000;
+  const near = recentReports().filter((r) => {
+    if (now - r.observed_at > 24 * 3600) return false;
+    return stretch.coords.some(([x, y]) => Math.abs(y - r.lat) < 0.00036 && Math.abs(x - r.lon) < 0.00047);
+  });
+  if (!near.length) return '';
+  const tally = new Map<string, { n: number; w: number; newest: number }>();
+  for (const r of near) {
+    const t = tally.get(r.state) ?? { n: 0, w: 0, newest: 0 };
+    t.n++;
+    t.w += (r.trusted ? 1.5 : 1) * Math.exp(-(now - r.observed_at) / (12 * 3600));
+    t.newest = Math.max(t.newest, r.observed_at);
+    tally.set(r.state, t);
+  }
+  const parts = [...tally].sort((a, b) => b[1].w - a[1].w).map(([st, t]) => `<i style="background:${REPORT_COLOR[st] ?? '#888'}"></i>${REPORT_LABEL[st] ?? st}${t.n > 1 ? ` ×${t.n}` : ''}`);
+  const newest = Math.max(...near.map((r) => r.observed_at));
+  const h = Math.max(1, Math.round((now - newest) / 3600));
+  return `<div class="cond-reports"><b>Reported here:</b> ${parts.join(" · ")} <span class="muted">(latest ${now - newest < 2700 ? "just now" : `${h} h ago`})</span></div>`;
 }
