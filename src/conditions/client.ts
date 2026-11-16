@@ -3,7 +3,8 @@
 
 import type { GeoJSONSource, LayerSpecification, Map as MlMap } from 'maplibre-gl';
 import type { Weather } from './model';
-import type { RunReply, RunRequest, Stretch, TrailIn } from './worker';
+import type { ProbeInputs, ProbeReply, ProbeRequest, RunReply, RunRequest, Stretch, TrailIn } from './worker';
+import type { Result } from './model';
 
 export const COND_SOURCE = 'trail-cond';
 
@@ -114,6 +115,7 @@ export class TrailConditions {
   private worker: Worker | null = null;
   private enabled = false;
   private runId = 0;
+  private probeId = -1_000_000; // separate id range from runs on the same worker
   private retries = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stretches: Stretch[] = [];
@@ -246,6 +248,39 @@ export class TrailConditions {
       if (id !== this.runId) return;
       this.onStatus({ state: 'error', message: String(err) });
     }
+  }
+
+  /**
+   * The model's inputs and verdict at the trail point nearest (lat, lon) on this stretch, at time
+   * `target`: what a condition report saves so the model can be re-run and scored later.
+   */
+  async probe(lat: number, lon: number, s: Stretch, target: number): Promise<{ lat: number; lon: number; inputs: ProbeInputs; result: Result; wx: Weather }> {
+    let best = 0;
+    let bestD = Infinity;
+    s.coords.forEach(([x, y], i) => {
+      const d = (x - lon) ** 2 * 0.58 + (y - lat) ** 2; // cos²(40°) for east-west
+      if (d < bestD) [best, bestD] = [i, d];
+    });
+    const a = s.coords[Math.max(0, best - 1)];
+    const b = s.coords[Math.min(s.coords.length - 1, best + 1)];
+    const dir = Math.atan2((b[0] - a[0]) * Math.cos((b[1] * Math.PI) / 180), b[1] - a[1]);
+    const [plon, plat] = s.coords[best];
+    const wx = await this.weather(plat, plon);
+    this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    const id = ++this.probeId;
+    const req: ProbeRequest = { kind: 'probe', id, lat: plat, lon: plon, dir, surface: s.surface, wx, target };
+    const reply = await new Promise<ProbeReply>((resolve) => {
+      const w = this.worker!;
+      const onMsg = (e: MessageEvent<ProbeReply>) => {
+        if (e.data.id !== id) return;
+        w.removeEventListener('message', onMsg);
+        resolve(e.data);
+      };
+      w.addEventListener('message', onMsg);
+      w.postMessage(req);
+    });
+    if (!reply.ok) throw new Error(reply.error);
+    return { lat: plat, lon: plon, inputs: reply.inputs, result: reply.result, wx };
   }
 
   /** The assessed stretch nearest a screen point (within a few pixels), for the details popup. */

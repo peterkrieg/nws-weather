@@ -10,5 +10,7 @@
     "run_worker_first": ["/api/*"]
   },
   "workers_dev": true,
+  // Trail condition reports ("How was it?"): calibration data for the conditions model.
+  "d1_databases": [{ "binding": "REPORTS", "database_name": "trail-reports", "database_id": "e997c27f-f330-4f0b-a04a-3a4c74281af5", "migrations_dir": "migrations" }],
   "routes": [{ "pattern": "weather.peterkrieg.com", "custom_domain": true }]
 }

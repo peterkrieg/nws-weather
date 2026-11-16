@@ -4,6 +4,7 @@ import { MantineProvider, createTheme } from '@mantine/core';
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
+import './reporter'; // picks up a reporter setup link before the URL is rewritten
 import App from './App';
 
 const theme = createTheme({

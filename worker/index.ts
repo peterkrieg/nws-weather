@@ -10,8 +10,9 @@
 import { trailWx } from './trailwx';
 import { dem } from './dem';
 import { landcover } from './landcover';
+import { reports, type ReportEnv } from './reports';
 
-interface Env {
+interface Env extends ReportEnv {
   ASSETS: { fetch(req: Request): Promise<Response> };
   PURPLEAIR_KEY?: string;
   AIRNOW_KEY?: string;
@@ -255,6 +256,7 @@ export default {
     if (url.pathname === '/api/trailwx') return trailWx(url);
     if (url.pathname.startsWith('/api/dem/')) return dem(url);
     if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/')) return landcover(url);
+    if (url.pathname === '/api/reports') return reports(req, url, env);
     if (url.pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);
     return env.ASSETS.fetch(req);
   },

@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
-    "check:conditions": "tsx scripts/check-conditions.mts"
+    "check:conditions": "tsx scripts/check-conditions.mts",
+    "score:reports": "tsx scripts/score-reports.mts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

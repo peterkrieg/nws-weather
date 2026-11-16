@@ -26,10 +26,30 @@ export interface Stretch {
   coords: [number, number][];
   state: State;
   name?: string;
+  surface?: string;
   /** Result for the wettest sample in the stretch, for the details popup. */
   worst: Result;
   lengthM: number;
 }
+
+/** Model inputs and result at one trail point and time: saved with each condition report. */
+export interface ProbeRequest {
+  kind: 'probe';
+  id: number;
+  lat: number;
+  lon: number;
+  dir: number;
+  surface?: string;
+  wx: Weather;
+  target: number;
+}
+export interface ProbeInputs {
+  terrain: Omit<PointTerrain, 'horizon'> & { horizon: number[] };
+  soil: ReturnType<SoilMap['at']>;
+  canopy: number | null;
+  surface?: string;
+}
+export type ProbeReply = { id: number; ok: true; inputs: ProbeInputs; result: Result } | { id: number; ok: false; error: string };
 
 export type RunReply =
   | { id: number; ok: true; stretches: Stretch[]; samples: number; missing: number; ms: number; loadMs: number }
@@ -136,7 +156,7 @@ async function run(req: RunRequest): Promise<RunReply> {
         // Start the new stretch where the last one ended so the line has no gaps.
         if (cur) (cur as Stretch).coords.push(here);
         flush();
-        cur = { coords: prev ? [prev, here] : [here], state: res.state, name: trail.name, worst: res, lengthM: STEP };
+        cur = { coords: prev ? [prev, here] : [here], state: res.state, name: trail.name, surface: trail.surface, worst: res, lengthM: STEP };
       }
       prev = here;
     }
@@ -148,9 +168,29 @@ async function run(req: RunRequest): Promise<RunReply> {
   return { id: req.id, ok: true, stretches, samples: count, missing, ms: Math.round(performance.now() - t0), loadMs };
 }
 
-self.onmessage = (e: MessageEvent<RunRequest>) => {
-  run(e.data).then(
+async function probe(req: ProbeRequest): Promise<ProbeReply> {
+  const pad = 0.002;
+  const box = { west: req.lon - pad, east: req.lon + pad, south: req.lat - pad, north: req.lat + pad };
+  await Promise.all([dem.load(box, FINE_Z, 400), dem.load(box, COARSE_Z, 4200), soil.load(box), canopy.load(box)]);
+  const terrain = pointTerrain(dem, req.lat, req.lon, req.dir);
+  if (!terrain) return { id: req.id, ok: false, error: 'no elevation data here' };
+  const site = { terrain, soil: soil.at(req.lat, req.lon), canopy: canopy.at(req.lat, req.lon), surface: req.surface };
+  const result = simulate(site, req.wx, req.target);
+  return { id: req.id, ok: true, result, inputs: { ...site, terrain: { ...terrain, horizon: [...terrain.horizon] } } };
+}
+
+self.onmessage = (e: MessageEvent<RunRequest | ProbeRequest>) => {
+  if ('kind' in e.data && e.data.kind === 'probe') {
+    const req = e.data;
+    probe(req).then(
+      (r) => self.postMessage(r),
+      (err) => self.postMessage({ id: req.id, ok: false, error: String(err) } satisfies ProbeReply),
+    );
+    return;
+  }
+  const req = e.data as RunRequest;
+  run(req).then(
     (r) => self.postMessage(r),
-    (err) => self.postMessage({ id: e.data.id, ok: false, error: String(err) } satisfies RunReply),
+    (err) => self.postMessage({ id: req.id, ok: false, error: String(err) } satisfies RunReply),
   );
 };

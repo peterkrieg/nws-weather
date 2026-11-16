@@ -618,3 +618,20 @@ footer a { color: inherit; }
 .cond-why li { margin: 2px 0; }
 .cond-out { margin-top: 6px; }
 .cond-note { margin-top: 6px; color: #888; font-size: 11px; }
+
+/* "How was it?" report form in the trail popup */
+.rep { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e3e3e3; }
+.rep-q { font-weight: 600; margin-bottom: 6px; }
+.rep-when, .rep-states { display: flex; flex-wrap: wrap; gap: 4px; }
+.rep-when { margin-bottom: 6px; }
+.rep button { font: inherit; font-size: 12px; border: 1px solid #d0d0d0; background: #fff; color: #222; border-radius: 999px; padding: 4px 9px; cursor: pointer; min-height: 30px; }
+.rep-when button.on { background: #222; color: #fff; border-color: #222; }
+.rep-states button { display: inline-flex; align-items: center; gap: 5px; }
+.rep-states button i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.rep-states button:active { transform: scale(0.96); }
+.rep-states.busy { opacity: 0.5; pointer-events: none; }
+.rep-extent { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: #555; }
+.rep-msg { margin-top: 6px; font-size: 12px; min-height: 1em; }
+.rep-msg .rep-undo { padding: 1px 8px; min-height: 0; margin-left: 4px; }
+.rep-pop { font-size: 12px; line-height: 1.4; }
+.rep-pop .muted { color: #888; }

@@ -8,6 +8,10 @@ import MtbLegend from './MtbLegend';
 import { conditionHtml } from './conditionText';
 import type { ConditionsStatus, Stretch } from './vectorMap';
 import type { MapPos } from './urlState';
+import type { TrailConditions } from './conditions/client';
+import { reportHtml, wireReport } from './reportForm';
+import { reporterKey } from './reporter';
+import ReportsLayer from './ReportsLayer';
 
 /** Phones and tablets: one finger scrolls the page, two fingers move the map. */
 const TOUCH = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
@@ -77,7 +81,7 @@ const validBase = (name: string) => (BASES.some((b) => b.name === name) ? name :
  * The Outdoors style is drawn by MapLibre (about 250 KB), so it's fetched only when that style is
  * on screen. This stand-in layer is what the layer switch adds and removes.
  */
-type CondCtl = { setEnabled(on: boolean): void; destroy(): void; stretchAt(lng: number, lat: number): Stretch | null };
+type CondCtl = { setEnabled(on: boolean): void; destroy(): void; stretchAt(lng: number, lat: number): Stretch | null; probe: TrailConditions['probe'] };
 type Lazy = L.Layer & {
   gl?: L.MaplibreGL;
   on_?: boolean;
@@ -88,6 +92,7 @@ type Lazy = L.Layer & {
   onCond: (s: ConditionsStatus) => void;
   setConditions: (on: boolean) => void;
   stretchAt: (lat: number, lng: number) => Stretch | null;
+  probe: TrailConditions['probe'];
 };
 const LazyVector = L.Layer.extend({
   initialize(this: Lazy, attribution: string, ratings: boolean, condOn: boolean, onCond: (s: ConditionsStatus) => void) {
@@ -130,6 +135,10 @@ const LazyVector = L.Layer.extend({
   setConditions(this: Lazy, on: boolean) {
     this.condOn = on;
     this.cond?.setEnabled(on);
+  },
+  probe(this: Lazy, ...args: Parameters<TrailConditions['probe']>) {
+    if (!this.cond) return Promise.reject(new Error('trail conditions are off'));
+    return this.cond.probe(...args);
   },
   stretchAt(this: Lazy, lat: number, lng: number) {
     return this.cond?.stretchAt(lng, lat) ?? null;
@@ -195,7 +204,18 @@ function Controller({
       const stretch = vector.current?.stretchAt(e.latlng.lat, e.latlng.lng);
       if (stretch) {
         // Narrow, and panned clear of the zoom/layer buttons and the legend chip.
-        L.popup({ className: 'cond-popup', maxWidth: 240, autoPanPaddingTopLeft: [58, 12], autoPanPaddingBottomRight: [58, 48] }).setLatLng(e.latlng).setContent(conditionHtml(stretch)).openOn(map);
+        const canReport = Boolean(reporterKey() && vector.current);
+        // An element (not an HTML string) so the report buttons keep their handlers.
+        const content = L.DomUtil.create('div');
+        content.innerHTML = conditionHtml(stretch) + (canReport ? reportHtml() : '');
+        if (canReport) {
+          L.DomEvent.disableClickPropagation(content);
+          wireReport(content, { lat: e.latlng.lat, lon: e.latlng.lng }, stretch, vector.current!);
+        }
+        L.popup({ className: 'cond-popup', maxWidth: canReport ? 280 : 240, autoPanPaddingTopLeft: [58, 12], autoPanPaddingBottomRight: [58, 48] })
+          .setLatLng(e.latlng)
+          .setContent(content)
+          .openOn(map);
         return;
       }
       // On touch screens a stray tap while scrolling shouldn't switch the forecast, so ask first.
@@ -426,6 +446,7 @@ export default function MapView({
           </button>
         </div>
       )}
+      {reporterKey() && <ReportsLayer />}
       <TwoFingerHint disabled={full} />
       <FullScreen full={full} setFull={setFull} />
       <Controller loc={loc} onPick={onPick} onTap={(lat, lon) => setTapped({ lat, lon })} onBase={pickBase} onMtb={onMtbRatings} onCond={onConditions} onAq={onAq} onView={onView} vector={vector} />
