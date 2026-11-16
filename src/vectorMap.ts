@@ -115,6 +115,47 @@ function arrowImage() {
   return g.getImageData(0, 0, size, size);
 }
 
+/** A small filled triangle for summits, signed-distance so it takes the label colour. */
+function peakImage() {
+  const size = 24;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#000';
+  g.beginPath();
+  g.moveTo(12, 4);
+  g.lineTo(21, 19);
+  g.lineTo(3, 19);
+  g.closePath();
+  g.fill();
+  return g.getImageData(0, 0, size, size);
+}
+
+function peakLayer(): LayerSpecification {
+  return {
+    id: 'peak',
+    type: 'symbol',
+    source: 'openmaptiles',
+    'source-layer': 'mountain_peak',
+    minzoom: 9,
+    filter: ['all', ['match', ['get', 'class'], ['peak', 'volcano'], true, false], ['has', 'name']],
+    layout: {
+      'icon-image': 'peak-icon',
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.45, 14, 0.6],
+      'text-field': ['case', ['has', 'ele_ft'], ['format', ['get', 'name'], {}, '\n', {}, ['concat', ['to-string', ['get', 'ele_ft']], ' ft'], { 'font-scale': 0.85 }], ['get', 'name']],
+      'text-font': ['Noto Sans Italic'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 9, 10.5, 14, 12],
+      'text-anchor': 'top',
+      'text-offset': [0, 0.5],
+      'text-max-width': 8,
+      'text-optional': true, // keep the triangle even when the name can't fit
+      // Highest summit wins when labels collide.
+      'symbol-sort-key': ['-', 0, ['coalesce', ['get', 'ele'], 0]],
+    },
+    paint: { 'icon-color': '#5c4630', 'text-color': '#4a3826', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.4 },
+  } as LayerSpecification;
+}
+
 function restyle(style: StyleSpecification): StyleSpecification {
   const layers: LayerSpecification[] = [];
   for (const layer of style.layers) {
@@ -143,8 +184,25 @@ function restyle(style: StyleSpecification): StyleSpecification {
       continue;
     }
     if (id === 'highway-name-path' && layer.type === 'symbol') {
-      // Trail names a little sooner and easier to read.
-      layers.push({ ...layer, minzoom: 14, paint: { ...layer.paint, 'text-color': '#7a4a22', 'text-halo-color': '#ffffff', 'text-halo-width': 1.2 } });
+      // Trail names as soon as the tiles carry them (MapLibre 14 = Leaflet 15), easier to read, and
+      // for old jeep roads (tracks) too, which the stock style labelled only as grey minor roads.
+      layers.push({
+        ...layer,
+        minzoom: 13.5,
+        filter: ['match', ['get', 'class'], ['path', 'track'], true, false],
+        // Switchbacks: allow the label to bend more than the 45° default or most trails get none.
+        layout: { ...layer.layout, 'symbol-spacing': 200, 'text-padding': 1, 'text-max-angle': 85, 'text-letter-spacing': 0.02, 'text-size': ['interpolate', ['linear'], ['zoom'], 14, 11.5, 16, 13] },
+        paint: { ...layer.paint, 'text-color': '#7a4a22', 'text-halo-color': '#ffffff', 'text-halo-width': 1.4 },
+      } as LayerSpecification);
+      continue;
+    }
+    // Route-number shields on trails ("1901") take the label slot and hide the trail's name.
+    if (/shield/.test(id) && 'filter' in layer) {
+      layers.push({ ...layer, filter: ['all', layer.filter, ['!', ['match', ['get', 'class'], ['path', 'track'], true, false]]] } as LayerSpecification);
+      continue;
+    }
+    if (id === 'highway-name-minor' && 'filter' in layer) {
+      layers.push({ ...layer, filter: ['all', layer.filter, ['!=', ['get', 'class'], 'track']] } as LayerSpecification);
       continue;
     }
     // Bike trails go over every road and path layer, under buildings and labels.
@@ -164,6 +222,9 @@ function restyle(style: StyleSpecification): StyleSpecification {
       });
     }
   }
+  // Peaks: the tiles carry them but the stock style never draws them. Last, so a summit wins over
+  // a neighbourhood label when they collide.
+  layers.push(peakLayer());
   return {
     ...style,
     sources: {
@@ -221,6 +282,7 @@ export async function createOutdoorsLayer(): Promise<L.Layer> {
     if (import.meta.env.DEV) (window as unknown as { __gl: unknown }).__gl = map;
     map.on('styleimagemissing', (e: { id: string }) => {
       if (e.id === 'mtb-arrow' && !map.hasImage('mtb-arrow')) map.addImage('mtb-arrow', arrowImage(), { sdf: true });
+      if (e.id === 'peak-icon' && !map.hasImage('peak-icon')) map.addImage('peak-icon', peakImage(), { sdf: true });
     });
   });
   return layer;
