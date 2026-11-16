@@ -22,7 +22,7 @@
 import { sunPos } from './geo';
 import type { Soil } from './landcover';
 import { horizonAt, type PointTerrain } from './terrain';
-import { atElev, type ByElevation } from './stations';
+import { atElev, byHeight, type ByElevation } from './stations';
 
 export interface Weather {
   elev: number;
@@ -39,9 +39,11 @@ export interface Weather {
   soilTemp: number[];
   precipScale: number;
   /** Measured-station correction to temperature (conditions/stations.ts): add a[i] + b[i]·(elev − e0). */
-  tempFix?: { a: number[]; b: number[]; e0: number; lo: number; hi: number };
+  tempFix?: { e: number[]; w: number[]; r: (number | null)[][] };
   /** Measured soil temperature (°C) and snow depth (cm) by elevation at the first hour. */
   start?: { soil2: ByElevation | null; soil8: ByElevation | null; snowCm: ByElevation | null };
+  /** Measured snow depth (cm) by elevation at the latest station reading (`at`). */
+  snowNow?: { at: number; e: number[]; w: number[]; v: (number | null)[] };
   /** Stations used, for the explanation. */
   measured?: string[];
   /** NOAA's daily snow analysis (SNODAS, 1 km cells): snow water (mm) at `at`. */
@@ -165,6 +167,35 @@ function fromHeat(H: number, L: number) {
 }
 const toHeat = (t: number, frost: number, L: number) => (t > 0 ? t : t < 0 ? t - L : -frost * L);
 
+/** Wet-bulb temperature (°C) from air temperature and relative humidity (Stull 2011). */
+export function wetBulb(t: number, rh: number) {
+  const r = Math.max(5, Math.min(100, rh));
+  return (
+    t * Math.atan(0.151977 * Math.sqrt(r + 8.313659)) +
+    Math.atan(t + r) -
+    Math.atan(r - 1.676331) +
+    0.00391838 * r ** 1.5 * Math.atan(0.023101 * r) -
+    4.686035
+  );
+}
+
+/**
+ * Share of this hour's precipitation falling as snow at the trail. Falling snow cools the air by
+ * evaporating and melting, so what decides rain or snow is close to the wet-bulb temperature, not
+ * the air temperature: in a humid storm at +1 °C it usually snows. Near the weather model's own
+ * grid height its snowfall (which sees the whole column of air) counts most; further up or down
+ * the trail's own wet-bulb takes over.
+ */
+export function snowShareAt(temp: number, rh: number, modelShare: number | null, heightGap: number) {
+  const byWetBulb = Math.max(0, Math.min(1, (1.6 - wetBulb(temp, rh)) / 1.4)); // ≤ 0.2 °C all snow, ≥ 1.6 °C all rain
+  if (modelShare == null) return byWetBulb;
+  const k = Math.max(0, 1 - Math.abs(heightGap) / 500);
+  return k * modelShare + (1 - k) * byWetBulb;
+}
+
+/** Snow water (mm) that counts as snow on the trail: about an inch of fresh snow, half that settled. */
+const SNOW_MM = 3;
+
 export function simulate(site: Site, wx: Weather, targetSec: number): Result {
   const tr = site.terrain;
   const { cap, drain } = surfaceParams(site);
@@ -198,9 +229,8 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
   // Temperature here: the model's, moved to this elevation, corrected by measured stations.
   const fix = wx.tempFix;
   const airTemp = (i: number) => {
-    let t = wx.temp[i] + (wx.elev - tr.elev) * LAPSE;
-    if (fix) t += fix.a[i] + fix.b[i] * (Math.max(fix.lo, Math.min(fix.hi, tr.elev)) - fix.e0);
-    return t;
+    const t = wx.temp[i] + (wx.elev - tr.elev) * LAPSE;
+    return fix ? t + (byHeight(fix.e, fix.w, fix.r[i], tr.elev) ?? 0) : t;
   };
 
   // Snow at the start: measured depth by elevation where stations cover this height (tapering to
@@ -242,6 +272,15 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
     if (best > 0.0002) snodasSwe = null; // more than ~1.5 km away: not this cell
   }
   let snodasDone = false;
+  // Station snow depth now, only where the stations span this height (±150 m).
+  const sn = wx.snowNow;
+  const snowNow = sn && sn.e.some((e, j) => sn.v[j] != null && Math.abs(e - tr.elev) < 250) ? sn : null;
+  let stationSnowDone = false;
+  // The satellite look, if it's recent enough to replay and means something here.
+  const seenRaw = site.seen && site.seen.at >= wx.t[i0] - 3600 ? site.seen : null;
+  const seesGround = canopy < (site.cover === 42 ? 0.3 : 0.5);
+  const seenUsed = seenRaw && (seenRaw.snow || seesGround) ? seenRaw : null;
+  let meltToday = 0;
   let litHours = 0;
   let dayHours = 0;
 
@@ -264,13 +303,17 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
 
     // --- Water in
     const p = wx.precip[i] * wx.precipScale;
-    const snowShare = Math.max(0, Math.min(1, (1.5 - temp) / 2));
+    // Open-Meteo's snowfall is cm of snow at 7 cm per cm of water.
+    const modelShare = wx.precip[i] > 0.1 && wx.snowfall?.[i] != null ? Math.min(1, (wx.snowfall[i] * 10) / 7 / wx.precip[i]) : null;
+    const snowShare = p > 0 ? snowShareAt(temp, wx.rh[i], modelShare, wx.elev - tr.elev) : 0;
     let rain = p * (1 - snowShare) * (1 - 0.15 * canopy);
     const newSnow = p * snowShare;
     swe += newSnow;
     if (newSnow > 1) {
       lastSnow = tEnd;
       refrozen = false; // fresh snow on top
+      meltedToday = false;
+      meltToday = 0;
     }
 
     // --- Sun reaching this spot
@@ -307,19 +350,29 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
       else if (shaded) swe = 0.5 * snodasSwe;
     }
 
-    // The satellite's look, when the run reaches its time: snow there or not, at 20 m. Under dense
-    // trees it can't see the ground, so "bare" only counts in the open.
-    const seen = site.seen;
-    if (seen && seen.at >= wx.t[i0] - 3600 && tEnd >= seen.at && tEnd - 3600 < seen.at) {
-      if (seen.snow) swe = Math.max(swe, snodasSwe != null && snodasSwe >= 2 ? snodasSwe : 15);
-      else if (canopy < 0.5) {
+    // Snow stations' latest depth by elevation (hourly, so newer than SNOTEL's daily analysis):
+    // within their height range it pulls the snow toward theirs. Depth → water at ~0.2 (fresh to
+    // settled early-season snow).
+    if (!stationSnowDone && snowNow && tEnd >= snowNow.at) {
+      stationSnowDone = true;
+      const shaded = dayHours > 0 && litHours / dayHours < 0.35;
+      const measured = Math.max(0, byHeight(snowNow.e, snowNow.w, snowNow.v, tr.elev) ?? 0) * 2;
+      if (measured < 1) swe = shaded ? swe * 0.7 : Math.min(swe, 1);
+      else swe = 0.5 * swe + 0.5 * measured;
+    }
+
+    // The satellite's look, when the run reaches its time: snow there or not, at 20 m. Under trees it
+    // sees the canopy, not the trail, so "bare" only counts in the open (evergreens hide it most).
+    if (seenUsed && tEnd >= seenUsed.at && tEnd - 3600 < seenUsed.at) {
+      if (seenUsed.snow) swe = Math.max(swe, snodasSwe != null && snodasSwe >= 2 ? snodasSwe : 15);
+      else {
         swe = 0;
         refrozen = false;
       }
     }
 
     // Surface temperature, roughly: warmed by sun, chilled on clear nights; snow-covered ≤ 0 °C.
-    const snowCover = swe > 5;
+    const snowCover = swe >= SNOW_MM;
     let tSurf = temp + GROUND.sun * rs - (rs === 0 ? 2 * (1 - wx.cloud[i] / 100) : 0);
     if (snowCover) tSurf = Math.min(0, tSurf);
 
@@ -343,13 +396,20 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
     // --- Snowmelt
     let melt = 0;
     if (swe > 0) {
-      melt = Math.min(swe, Math.max(0, 0.12 * temp + (temp > -2 ? 0.0025 * rs : 0)));
+      // From above (air, sun) and below: early snow on unfrozen ground melts from underneath
+      // (~0.1 mm/h per °C of the top layer), which is why the first thin snows often don't stick.
+      const fromAbove = Math.max(0, 0.12 * temp + (temp > -2 ? 0.0025 * rs : 0));
+      melt = Math.min(swe, fromAbove + 0.1 * Math.max(0, g1.t));
       swe -= melt;
-      if (melt > 0.2) meltedToday = true;
+      // Only melt at the surface makes a crust when it refreezes.
+      meltToday += Math.min(melt, fromAbove);
+      // A real melt (a couple of mm of water), not a trace in an hour of sun.
+      if (meltToday >= 2) meltedToday = true;
       // Melted, then frozen again: the snow turns to a crust or ice.
       if (meltedToday && tSurf < -1) {
         refrozen = true;
         meltedToday = false;
+        meltToday = 0;
       }
     }
 
@@ -389,14 +449,14 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
     const radEvap = (rs * 0.6 * 3600) / 2.45e6; // mm/h if all absorbed sun went into evaporation
     const airEvap = 0.05 * vpd(temp, wx.rh[i]) * (1 + 0.5 * wx.wind[i]) * (1 - 0.4 * canopy);
     const wetness = w / cap;
-    const evap = (radEvap + airEvap) * Math.max(0.1, Math.min(1, wetness / 0.6)) * (frozenTop ? 0.3 : 1) * (swe > 3 ? 0 : 1);
+    const evap = (radEvap + airEvap) * Math.max(0.1, Math.min(1, wetness / 0.6)) * (frozenTop ? 0.3 : 1) * (swe >= SNOW_MM ? 0 : 1);
     w = Math.max(0, w - evap);
 
     const wet = w / cap;
     const sinceSnow = lastSnow == null ? Infinity : (tEnd - lastSnow) / 3600;
     let state: State;
-    // Refrozen snow: a thin layer (≲2") is basically ice; thicker, it's a crust over snow.
-    if (snowCover) state = refrozen && swe < 12 ? 'icy' : !refrozen && (sinceSnow < 18 || swe > 40) ? 'soft_snow' : 'packed_snow';
+    // Refrozen snow: a thin layer (≲1", 8 mm of water) is basically ice; thicker, it's a crust over snow.
+    if (snowCover) state = refrozen && swe < 8 ? 'icy' : !refrozen && (sinceSnow < 18 || swe > 40) ? 'soft_snow' : 'packed_snow';
     else if (ice > TUNE.icyMm) state = 'icy';
     else if (frozenTop) state = wet > TUNE.tacky ? 'frozen' : 'dry';
     else state = wet >= TUNE.muddy ? 'muddy' : wet >= TUNE.damp ? 'damp' : wet >= TUNE.tacky ? 'tacky' : 'dry';
@@ -427,7 +487,7 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
           hoursSinceSnow: Number.isFinite(sinceSnow) ? sinceSnow : null,
           under: snowCover ? (frozenTop ? 'frozen' : wet >= TUNE.muddy ? 'mud' : 'firm') : null,
           measured: wx.measured,
-          seen: seen && seen.at >= wx.t[i0] - 3600 && seen.at <= targetSec ? seen : null,
+          seen: seenUsed && seenUsed.at <= targetSec ? seenUsed : null,
         },
         goodBy: null,
         thawBy: null,

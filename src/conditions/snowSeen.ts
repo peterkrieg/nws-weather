@@ -102,14 +102,17 @@ async function inflate(data: Uint8Array) {
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
 
-class SceneReader {
+export class SceneReader {
   private header: Promise<Header> | null = null;
   private tiles = new Map<number, Promise<Uint8Array | null>>();
+  /** A read failed (network): answers from this scene may be missing, so don't cache "no look". */
+  failed = false;
   constructor(readonly s: Scene) {}
 
   private head() {
     return (this.header ??= readHeader(this.s.href).catch((e) => {
       this.header = null;
+      this.failed = true;
       throw e;
     }));
   }
@@ -138,6 +141,7 @@ class SceneReader {
         return px;
       })().catch(() => {
         this.tiles.delete(idx);
+        this.failed = true;
         return null;
       });
       this.tiles.set(idx, t);
@@ -173,10 +177,12 @@ export class SnowSeen {
     for (const p of todo) this.seen.set(this.key(p.lat, p.lon), null);
     // Newest scene first; each point stops at the first clear look.
     let left = todo;
+    let failed = false;
     for (const s of this.scenes) {
       if (!left.length) break;
       const reader = this.readers.get(s.href) ?? new SceneReader(s);
       this.readers.set(s.href, reader);
+      reader.failed = false;
       const next: typeof left = [];
       // Pull the tiles these points need in parallel first, then classify.
       await Promise.all(
@@ -190,8 +196,11 @@ export class SnowSeen {
         if (cls != null && CLEAR.has(cls)) this.seen.set(this.key(p.lat, p.lon), { snow: cls === SNOW, at: s.at });
         else next.push(p);
       }
+      if (reader.failed) failed = true;
       left = next;
     }
+    // Points still without a look after a failed read get asked again next time.
+    if (failed) for (const p of left) this.seen.delete(this.key(p.lat, p.lon));
   }
 
   private key(lat: number, lon: number) {

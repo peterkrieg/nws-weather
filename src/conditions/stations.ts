@@ -59,6 +59,24 @@ export interface ByElevation {
   lo: number;
   hi: number;
 }
+/**
+ * Stations' values at a height: a weighted average favouring stations near that height (within a
+ * few hundred metres) and nearby; far-off heights still count a little, so a trail above or below
+ * every station takes the closest ones. Null when no station has a value.
+ */
+export function byHeight(e: number[], w: number[], v: (number | null)[], elev: number): number | null {
+  let sw = 0;
+  let sv = 0;
+  for (let j = 0; j < e.length; j++) {
+    const x = v[j];
+    if (x == null) continue;
+    const k = w[j] * (Math.exp(-(((e[j] - elev) / 200) ** 2)) + 0.01);
+    sw += k;
+    sv += k * x;
+  }
+  return sw ? sv / sw : null;
+}
+
 /** Value of a fit at an elevation, flat beyond the stations' range. */
 export const atElev = (f: ByElevation, e: number) => f.a + f.b * (Math.max(f.lo, Math.min(f.hi, e)) - f.e0);
 
@@ -67,49 +85,34 @@ export function applyStations(wx: Weather, g: Ground | null): Weather {
   const weight = (s: GroundStation) => 1 / (1 + s.km / 10);
   const gi = (t: number) => Math.round((t - g.t[0]) / 3600);
 
-  // Temperature correction per forecast hour.
-  const a: number[] = [];
-  const b: number[] = [];
-  let e0 = 0;
-  let lo = Infinity;
-  let hi = -Infinity;
-  let last: { a: number; b: number; t: number } | null = null;
+  // Temperature correction per forecast hour: each station's error (measured − model moved to
+  // its height). The trail takes the stations nearest its own height (see byHeight), so a profile
+  // that bends — a storm holding near 0 °C through mid-slopes, an inversion — comes through as
+  // measured rather than as one straight line through every station from valley to ridge.
+  const stations = g.stations.filter((s) => s.temp.some((v) => v != null));
+  if (!stations.length) return wx;
   const used = new Set<string>();
-  const fits: (ByElevation | null)[] = wx.t.map((t, i) => {
+  const r: (number | null)[][] = [];
+  let last: { r: (number | null)[]; t: number } | null = null;
+  for (let i = 0; i < wx.t.length; i++) {
+    const t = wx.t[i];
     const k = gi(t);
-    if (k < 0 || k >= g.t.length) return null;
-    const pts: Pt[] = [];
-    for (const s of g.stations) {
-      const obs = s.temp[k];
-      if (obs == null) continue;
-      const modelThere = wx.temp[i] + (wx.elev - s.elev) * LAPSE;
-      pts.push({ e: s.elev, v: obs - modelThere, w: weight(s) });
-      used.add(s.name);
-    }
-    return pts.length ? fit(pts, 0.02) : null;
-  });
-  const firstFit = fits.find((f) => f) ?? null;
-  if (!firstFit) return wx;
-  wx.t.forEach((t, i) => {
-    const f = fits[i];
-    if (f) {
-      // Express every hour around one reference elevation so a[i], b[i] share e0.
-      if (!e0) e0 = f.e0;
-      a.push(f.a + f.b * (e0 - f.e0));
-      b.push(f.b);
-      lo = Math.min(lo, f.lo);
-      hi = Math.max(hi, f.hi);
-      last = { a: a[i], b: f.b, t };
+    const row = stations.map((s) => {
+      const obs = k >= 0 && k < g.t.length ? s.temp[k] : null;
+      return obs == null ? null : obs - (wx.temp[i] + (wx.elev - s.elev) * LAPSE);
+    });
+    if (row.some((v) => v != null)) {
+      for (const s of stations) if (s.temp[k] != null) used.add(s.name);
+      last = { r: row, t };
+      r.push(row);
     } else if (last) {
-      const k = Math.exp(-(t - (last as { t: number }).t) / 3600 / FADE_H);
-      a.push((last as { a: number }).a * k);
-      b.push((last as { b: number }).b * k);
-    } else {
-      a.push(firstFit.a + firstFit.b * ((e0 || firstFit.e0) - firstFit.e0));
-      b.push(firstFit.b);
-    }
-  });
-  if (!e0) e0 = firstFit.e0;
+      // Past the last reading: the error fades over ~12 h of forecast.
+      const f = Math.exp(-(t - last.t) / 3600 / FADE_H);
+      r.push(last.r.map((v) => (v == null ? null : v * f)));
+    } else r.push(row);
+  }
+  const elevs = stations.map((s) => s.elev);
+  const weights = stations.map(weight);
 
   // Measured ground and snow at the start of the model run (3 days back).
   const k0 = gi(wx.t[0]);
@@ -126,9 +129,18 @@ export function applyStations(wx: Weather, g: Ground | null): Weather {
     return pts.length ? fit(pts, maxSlope) : null;
   };
 
+  // Latest snow depth at each snow station (within the last 6 h).
+  const snowSt = g.stations.filter((s) => s.snow);
+  let snowNow: Weather['snowNow'];
+  for (let k = g.t.length - 1; k >= Math.max(0, g.t.length - 6) && !snowNow; k--) {
+    const v = snowSt.map((s) => s.snow![k] ?? null);
+    if (v.filter((x) => x != null).length >= 2) snowNow = { at: g.t[k] + 3600, e: snowSt.map((s) => s.elev), w: snowSt.map(weight), v };
+  }
+
   return {
     ...wx,
-    tempFix: { a, b, e0, lo, hi },
+    snowNow,
+    tempFix: { e: elevs, w: weights, r },
     start: { soil2: startFit('soil2', 0.02), soil8: startFit('soil8', 0.02), snowCm: startFit('snow', 1) },
     measured: [...used],
   };
