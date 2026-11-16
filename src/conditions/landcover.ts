@@ -137,13 +137,17 @@ function parseSoilRows(rows: (string | null)[][]): SoilPoly[] {
 const CANOPY_Z = 14;
 const CANOPY_PX = 128; // ~9 m pixels at 40°N for 30 m data
 const WMS = 'https://www.mrlc.gov/geoserver/ows';
-export const CANOPY_LEGEND_URL = `${WMS}?service=WMS&version=1.1.1&request=GetLegendGraphic&layer=NLCD_Canopy&format=application/json`;
+// Tree canopy (% cover) and land cover class (deciduous / evergreen / shrub…), same tiling.
+const LAYERS = { canopy: 'NLCD_Canopy', nlcd: 'mrlc_display:NLCD_2021_Land_Cover_L48' } as const;
+export type CoverKind = keyof typeof LAYERS;
+export const legendUrl = (kind: CoverKind) => `${WMS}?service=WMS&version=1.1.1&request=GetLegendGraphic&layer=${LAYERS[kind]}&format=application/json`;
+export const CANOPY_LEGEND_URL = legendUrl('canopy');
 
-/** MRLC map request for one z14 tile's tree canopy picture (run server-side, cached). */
-export function canopyUrl(x: number, y: number) {
+/** MRLC map request for one z14 tile's picture (run server-side, cached). */
+export function canopyUrl(x: number, y: number, kind: CoverKind = 'canopy') {
   const b = tileBoundsLatLon(x, y, CANOPY_Z);
   const q = new URLSearchParams({
-    service: 'WMS', version: '1.1.1', request: 'GetMap', layers: 'NLCD_Canopy', styles: '', srs: 'EPSG:4326',
+    service: 'WMS', version: '1.1.1', request: 'GetMap', layers: LAYERS[kind], styles: '', srs: 'EPSG:4326',
     bbox: `${b.west},${b.south},${b.east},${b.north}`, width: String(CANOPY_PX), height: String(CANOPY_PX),
     format: 'image/png', transparent: 'true',
   });
@@ -155,16 +159,17 @@ export type ImageDecoder = (buf: ArrayBuffer) => Promise<{ data: Uint8ClampedArr
 export class CanopyMap {
   private tiles = new Map<string, Uint8Array | null>();
   private legend: Map<number, number> | null = null;
-  constructor(private decode: ImageDecoder | null) {}
+  /** kind 'nlcd': land cover class codes (41 deciduous, 42 evergreen, 43 mixed, 52 shrub…) instead of %. */
+  constructor(private decode: ImageDecoder | null, private kind: CoverKind = 'canopy') {}
 
   private async loadLegend() {
     if (this.legend) return this.legend;
-    const r = await fetch('/api/canopy/legend');
+    const r = await fetch(`/api/${this.kind}/legend`);
     const j = (await r.json()) as { Legend: { rules: { symbolizers: { Raster: { colormap: { entries: { quantity: string; color: string }[] } } }[] }[] }[] };
     const m = new Map<number, number>();
     for (const e of j.Legend[0].rules[0].symbolizers[0].Raster.colormap.entries) {
       const q = Number(e.quantity);
-      if (q <= 100) m.set(parseInt(e.color.slice(1), 16), q);
+      if (q <= 100 && (this.kind === 'canopy' || q > 0)) m.set(parseInt(e.color.slice(1), 16), q);
     }
     return (this.legend = m);
   }
@@ -191,7 +196,7 @@ export class CanopyMap {
   }
 
   private async fetchTile(x: number, y: number, legend: Map<number, number>) {
-    const r = await fetch(`/api/canopy/${x}/${y}`);
+    const r = await fetch(`/api/${this.kind}/${x}/${y}`);
     if (!r.ok) throw new Error(`canopy ${r.status}`);
     const img = await this.decode!(await r.arrayBuffer());
     const out = new Uint8Array(CANOPY_PX * CANOPY_PX);
@@ -214,8 +219,19 @@ export class CanopyMap {
     return out;
   }
 
+  /** Land cover class code at a point (kind 'nlcd'), or null. */
+  classAt(lat: number, lon: number): number | null {
+    const v = this.raw(lat, lon);
+    return v == null || v === 0 ? null : v;
+  }
+
   /** Tree cover 0–1, or null if unknown. */
   at(lat: number, lon: number): number | null {
+    const v = this.raw(lat, lon);
+    return v == null ? null : v / 100;
+  }
+
+  private raw(lat: number, lon: number): number | null {
     const t = tileXY(lat, lon, CANOPY_Z);
     const tile = this.tiles.get(`${Math.floor(t.x)}/${Math.floor(t.y)}`);
     if (!tile) return null;
@@ -223,6 +239,6 @@ export class CanopyMap {
     const b = tileBoundsLatLon(Math.floor(t.x), Math.floor(t.y), CANOPY_Z);
     const px = Math.min(CANOPY_PX - 1, Math.floor(((lon - b.west) / (b.east - b.west)) * CANOPY_PX));
     const py = Math.min(CANOPY_PX - 1, Math.floor(((b.north - lat) / (b.north - b.south)) * CANOPY_PX));
-    return tile[py * CANOPY_PX + px] / 100;
+    return tile[py * CANOPY_PX + px];
   }
 }

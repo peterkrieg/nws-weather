@@ -65,14 +65,16 @@ const dem = new Dem(async (x, y, z) => {
 });
 const soil = new SoilMap();
 const snowSeen = new SnowSeen();
-const canopy = new CanopyMap(async (buf) => {
+const decodePng = async (buf: ArrayBuffer) => {
   const bmp = await createImageBitmap(new Blob([buf]), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
   const c = new OffscreenCanvas(bmp.width, bmp.height);
   const g = c.getContext('2d', { willReadFrequently: true })!;
   g.drawImage(bmp, 0, 0);
   const img = g.getImageData(0, 0, bmp.width, bmp.height);
   return { data: img.data, width: img.width, height: img.height };
-});
+};
+const canopy = new CanopyMap(decodePng);
+const landCover = new CanopyMap(decodePng, 'nlcd');
 
 interface Sample {
   lon: number;
@@ -118,6 +120,7 @@ async function run(req: RunRequest): Promise<RunReply> {
     dem.load(req.box, COARSE_Z, 4200),
     soil.load(req.box),
     canopy.load(req.box),
+    landCover.load(req.box).catch(() => {}),
     // Satellite snow is a refinement: never let it hold up or break a run.
     snowSeen.load(cLat, cLon, sampled.flat()).catch(() => {}),
   ]);
@@ -158,7 +161,7 @@ async function run(req: RunRequest): Promise<RunReply> {
         continue;
       }
       count++;
-      const res = simulate({ terrain, soil: soil.at(p.lat, p.lon), canopy: canopy.at(p.lat, p.lon), surface: trail.surface, seen: snowSeen.at(p.lat, p.lon) }, req.wx, req.target);
+      const res = simulate({ terrain, soil: soil.at(p.lat, p.lon), canopy: canopy.at(p.lat, p.lon), surface: trail.surface, cover: landCover.classAt(p.lat, p.lon), seen: snowSeen.at(p.lat, p.lon) }, req.wx, req.target);
       const here: [number, number] = [p.lon, p.lat];
       if (cur && (cur as Stretch).state === res.state) {
         const c = cur as Stretch;
@@ -184,10 +187,10 @@ async function run(req: RunRequest): Promise<RunReply> {
 async function probe(req: ProbeRequest): Promise<ProbeReply> {
   const pad = 0.002;
   const box = { west: req.lon - pad, east: req.lon + pad, south: req.lat - pad, north: req.lat + pad };
-  await Promise.all([dem.load(box, FINE_Z, 400), dem.load(box, COARSE_Z, 4200), soil.load(box), canopy.load(box), snowSeen.load(req.lat, req.lon, [req])]).catch(() => {});
+  await Promise.all([dem.load(box, FINE_Z, 400), dem.load(box, COARSE_Z, 4200), soil.load(box), canopy.load(box), landCover.load(box), snowSeen.load(req.lat, req.lon, [req])]).catch(() => {});
   const terrain = pointTerrain(dem, req.lat, req.lon, req.dir);
   if (!terrain) return { id: req.id, ok: false, error: 'no elevation data here' };
-  const site = { terrain, soil: soil.at(req.lat, req.lon), canopy: canopy.at(req.lat, req.lon), surface: req.surface, seen: snowSeen.at(req.lat, req.lon) };
+  const site = { terrain, soil: soil.at(req.lat, req.lon), canopy: canopy.at(req.lat, req.lon), surface: req.surface, cover: landCover.classAt(req.lat, req.lon), seen: snowSeen.at(req.lat, req.lon) };
   const result = simulate(site, req.wx, req.target);
   return { id: req.id, ok: true, result, inputs: { ...site, terrain: { ...terrain, horizon: [...terrain.horizon] } } };
 }

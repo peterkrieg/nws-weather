@@ -21,6 +21,7 @@ interface Case {
   lon: number;
   bearing: number;
   canopy: number;
+  cover: number; // national land cover class at the spot
   at: string; // local time of the observation (ISO with offset)
   weather: string; // fixture file
   expect: State[];
@@ -30,13 +31,13 @@ const CASES: Case[] = [
   {
     name: 'City Creek Pipeline Trail, north-facing hollow',
     observed: 'muddy (ran it 2026-11-15 1 pm)',
-    lat: 40.80289, lon: -111.85847, bearing: -120, canopy: 0.56,
+    lat: 40.80289, lon: -111.85847, bearing: -120, canopy: 0.56, cover: 41,
     at: '2026-11-15T13:00:00-07:00', weather: 'trailwx-2026-11-15-slc.json', expect: ['muddy'],
   },
   {
     name: 'City Creek Pipeline Trail, upper rib',
     observed: 'slightly damp, not muddy (2026-11-15 1 pm)',
-    lat: 40.80094, lon: -111.85764, bearing: 151, canopy: 0.18,
+    lat: 40.80094, lon: -111.85764, bearing: 151, canopy: 0.18, cover: 52,
     at: '2026-11-15T13:00:00-07:00', weather: 'trailwx-2026-11-15-slc.json', expect: ['damp', 'tacky'],
   },
 ];
@@ -54,7 +55,7 @@ for (const c of CASES) {
   const wx = JSON.parse(readFileSync(new URL(`./fixtures/${c.weather}`, import.meta.url), 'utf8'));
   const terrain = pointTerrain(dem, c.lat, c.lon, (c.bearing * Math.PI) / 180);
   if (!terrain) throw new Error(`no terrain for ${c.name}`);
-  const r = simulate({ terrain, soil: soil.at(c.lat, c.lon), canopy: c.canopy, surface: 'ground' }, wx, Date.parse(c.at) / 1000);
+  const r = simulate({ terrain, soil: soil.at(c.lat, c.lon), canopy: c.canopy, cover: c.cover, surface: 'ground' }, wx, Date.parse(c.at) / 1000);
   const ok = c.expect.includes(r.state);
   if (!ok) failed++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${c.name}: model ${r.state} (wetness ${r.wet.toFixed(2)}), observed ${c.observed}`);

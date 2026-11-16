@@ -74,7 +74,8 @@ export function conditionHtml(s: Stretch): string {
     lines.push(`Satellite saw ${w.seen.snow ? 'snow' : 'bare ground'} here ${day}.`);
   }
   const ground = w.surface && !['ground', 'dirt', 'unpaved', 'earth'].includes(w.surface) ? `${w.surface.replace('_', ' ')} surface` : `${w.soil} soil${w.rocky ? ', rocky' : ''}`;
-  lines.push(`${ground[0].toUpperCase()}${ground.slice(1)}${w.canopy != null ? `, ${Math.round(w.canopy * 100)}% tree cover` : ''}.`);
+  const kind = ({ 41: ' (deciduous: bare in winter)', 42: ' (conifers)', 43: ' (mixed)', 52: ' (scrub oak / brush)' } as Record<number, string>)[w.cover ?? 0] ?? '';
+  lines.push(`${ground[0].toUpperCase()}${ground.slice(1)}${w.canopy != null ? `, ${Math.round(w.canopy * 100)}% tree cover${w.canopy >= 0.1 ? kind : ''}` : ''}.`);
   const outlook =
     r.state === 'frozen'
       ? r.thawBy

@@ -258,7 +258,7 @@ export default {
     if (url.pathname === '/api/aq') return airQuality(url, env);
     if (url.pathname === '/api/trailwx') return trailWx(url);
     if (url.pathname.startsWith('/api/dem/')) return dem(url);
-    if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/')) return landcover(url);
+    if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/') || url.pathname.startsWith('/api/nlcd/')) return landcover(url);
     if (url.pathname === '/api/reports') return reports(req, url, env);
     if (url.pathname === '/api/ground') return ground(url);
     if (url.pathname === '/api/snow') return snow(url);

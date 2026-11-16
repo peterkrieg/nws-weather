@@ -57,6 +57,8 @@ export interface Site {
   canopy: number | null;
   /** OpenStreetMap surface tag, if any. */
   surface?: string;
+  /** National land cover class: 41 deciduous, 42 evergreen, 43 mixed forest, 52 shrub… */
+  cover?: number | null;
   /** What Sentinel-2 last saw here (20 m pixel), if it had a clear look. */
   seen?: { snow: boolean; at: number } | null;
 }
@@ -79,6 +81,7 @@ export interface Result {
     soil: string;
     rocky: boolean;
     canopy: number | null;
+    cover: number | null;
     surface?: string;
     ground: number; // °C, top layer
     frost: number; // 0–1, top layer frozen
@@ -161,9 +164,12 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
   const tr = site.terrain;
   const { cap, drain } = surfaceParams(site);
   const fieldCap = 0.6 * cap;
+  // How much of the tree cover's shade is there: conifers all year; deciduous trees and shrubs
+  // (Gambel oak in the foothills) keep only their branches' shade November to April.
+  const bare = site.cover === 42 ? 0.85 : site.cover === 41 ? 0.25 : site.cover === 43 ? 0.55 : site.cover === 52 ? 0.3 : 0.5;
   const leaf = (ms: number) => {
     const mth = new Date(ms).getUTCMonth();
-    return mth >= 4 && mth <= 9 ? 0.85 : 0.5; // deciduous trees still shade a little when bare
+    return mth >= 4 && mth <= 9 ? 0.85 : bare;
   };
   const canopy = site.canopy ?? 0.2;
 
@@ -407,6 +413,7 @@ export function simulate(site: Site, wx: Weather, targetSec: number): Result {
           soil: site.soil?.name ?? 'unknown soil',
           rocky: (site.soil?.rock ?? 0) >= 20 || (site.soil?.fines ?? 100) < 70,
           canopy: site.canopy,
+          cover: site.cover ?? null,
           surface: site.surface,
           ground: ground.t,
           frost: Math.max(skin.frost, ground.frost),
