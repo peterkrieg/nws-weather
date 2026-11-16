@@ -1,7 +1,10 @@
 // "Recent satellite" map style: the newest cloud-free Sentinel-2 picture of each spot.
 //
-// Each map tile is drawn in the browser from Sentinel-2 true-colour images (TCI, 10 m, plus their
-// 20–160 m overviews) read straight from the public AWS bucket, a few hundred KB per 10 km square.
+// Each map tile is drawn in the browser from the raw Sentinel-2 red, green and blue bands (10 m,
+// plus their 20–160 m overviews) read straight from the public AWS bucket. The ready-made
+// true-colour file (TCI) clips everything brighter than bare ground, so snow comes out flat white;
+// the raw bands go through Sentinel Hub's "optimized L2A" tone curve instead, which rolls off the
+// highlights and keeps snow texture.
 // The newest pass is drawn first; pixels its scene classification (SCL) calls cloud, cloud
 // shadow or no-data are filled from the next-newest pass, and so on. The scene list comes from
 // /api/s2?cell= (cached 3 h per 0.5° square).
@@ -9,7 +12,7 @@
 import L from 'leaflet';
 import { toUtm, type Scene as BaseScene } from './conditions/snowSeen';
 
-type Scene = BaseScene & { tci: NonNullable<BaseScene['tci']>; bbox: number[] };
+type Scene = BaseScene & { tci: NonNullable<BaseScene['tci']>; bands: NonNullable<BaseScene['bands']>; bbox: number[] };
 
 // SCL classes that say nothing about the ground: 0 no data, 3 cloud shadow, 8–9 cloud, 10 cirrus.
 const HIDDEN = new Set([0, 3, 8, 9, 10]);
@@ -28,6 +31,7 @@ interface Ifd {
   offsets: number[];
   counts: number[];
   spp: number;
+  bits: number;
   predictor: number;
 }
 
@@ -78,6 +82,7 @@ async function readIfds(url: string): Promise<Ifd[]> {
       offsets: arr(324),
       counts: arr(325),
       spp: tags.has(277) ? one(277) : 1,
+      bits: tags.has(258) ? (tags.get(258)!.count === 1 ? one(258) : arr(258)[0]) : 8,
       predictor: tags.has(317) ? one(317) : 1,
     });
     ifd = u32(ifd + 2 + n * 12);
@@ -91,10 +96,11 @@ async function inflate(data: Uint8Array) {
 }
 
 /** Decoded tiles, newest use last; kept under a memory budget (full-size colour tiles are 3 MB). */
-const decoded = new Map<string, Promise<Uint8Array | null>>();
+type Px = Uint8Array | Uint16Array;
+const decoded = new Map<string, Promise<Px | null>>();
 const sizes = new Map<string, number>();
 let held = 0;
-const BUDGET = 80e6;
+const BUDGET = 120e6;
 function remember(key: string, size: number) {
   sizes.set(key, size);
   held += size;
@@ -120,7 +126,7 @@ function ifds(url: string) {
   return h;
 }
 
-function tile(url: string, level: Ifd, lv: number, idx: number): Promise<Uint8Array | null> {
+function tile(url: string, level: Ifd, lv: number, idx: number): Promise<Px | null> {
   const key = `${url}|${lv}|${idx}`;
   const hit = decoded.get(key);
   if (hit) {
@@ -132,13 +138,16 @@ function tile(url: string, level: Ifd, lv: number, idx: number): Promise<Uint8Ar
     const off = level.offsets[idx];
     const len = level.counts[idx];
     if (!len) return null;
-    const px = await inflate(await range(url, off, off + len - 1));
+    const raw = await inflate(await range(url, off, off + len - 1));
+    // 16-bit samples are little-endian in these files, like every browser's memory.
+    const px: Px = level.bits === 16 ? new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength >> 1) : raw;
     if (level.predictor === 2) {
       const { tileW, tileH, spp } = level;
       const row = tileW * spp;
-      for (let r = 0; r < tileH; r++) for (let i = r * row + spp, end = (r + 1) * row; i < end; i++) px[i] = (px[i] + px[i - spp]) & 255;
+      const mask = level.bits === 16 ? 0xffff : 0xff;
+      for (let r = 0; r < tileH; r++) for (let i = r * row + spp, end = (r + 1) * row; i < end; i++) px[i] = (px[i] + px[i - spp]) & mask;
     }
-    remember(key, px.length);
+    remember(key, px.byteLength);
     return px;
   })().catch(() => {
     decoded.delete(key);
@@ -191,7 +200,7 @@ function cellScenes(lat: number, lon: number): Promise<Scene[]> {
   if (!p) {
     p = fetch(`/api/s2?cell=${lat},${lon}`)
       .then((r) => (r.ok ? (r.json() as Promise<BaseScene[]>) : []))
-      .then((all) => all.filter((s): s is Scene => !!s.tci && !!s.bbox))
+      .then((all) => all.filter((s): s is Scene => !!s.tci && !!s.bands && !!s.bbox))
       .catch(() => {
         lists.delete(key);
         return [];
@@ -334,6 +343,45 @@ const tile2lat = (y: number, z: number) => {
   return (180 / Math.PI) * Math.atan(Math.sinh(n));
 };
 
+// ---- Tone curve (after Sentinel Hub's "optimized L2A" true colour) ---------------------------------
+// Reflectance → display: a highlight roll-off (0.18 at mid-grey, 1.5 at white), a 2.2 gamma, a
+// small black point, 1.2× saturation, then sRGB. Their defaults (0.13 / 3.0 / 1.8) wash out trees
+// and shaded snow; these keep conifers near-black and shadows blue-grey (closer to CalTopo), with
+// sunlit snow around 235–248 and its texture intact instead of clipping as the TCI file does.
+// Roughly: tree 0.04 → 35, bare ground 0.08–0.12 → 75–105, shaded snow 0.25 → 165, snow 0.9 → 247.
+const MAX_R = 1.5;
+const MID_R = 0.18;
+const BLACK = 0.01;
+const SAT = 1.2;
+const GAMMA = 2.2;
+const G_OFF = 0.01;
+const G_OFF_POW = G_OFF ** GAMMA;
+const G_OFF_RANGE = (1 + G_OFF) ** GAMMA - G_OFF_POW;
+function sAdj(a: number) {
+  const ar = Math.min(1, Math.max(0, a / MAX_R));
+  const tx = MID_R / MAX_R;
+  const v = ar === 0 ? 0 : (ar * (ar * tx - 1)) / (ar * (2 * tx - 1) - tx); // ty = 1
+  return ((v + G_OFF) ** GAMMA - G_OFF_POW) / G_OFF_RANGE;
+}
+const toneLuts = new Map<string, Float32Array>();
+/** Raw band value (0–20000) → tone-curved 0–1, for one scale/offset. */
+function toneLut(scale: number, offset: number) {
+  const k = `${scale}|${offset}`;
+  let lut = toneLuts.get(k);
+  if (!lut) {
+    lut = new Float32Array(20001);
+    for (let dn = 0; dn <= 20000; dn++) lut[dn] = sAdj(Math.max(0, dn * scale + offset - BLACK));
+    toneLuts.set(k, lut);
+  }
+  return lut;
+}
+const SRGB = new Uint8Array(4097);
+for (let i = 0; i <= 4096; i++) {
+  const c = i / 4096;
+  SRGB[i] = Math.round(255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055));
+}
+const srgb = (v: number) => SRGB[Math.min(4096, Math.max(0, Math.round(v * 4096)))];
+
 const G = 16; // UTM is worked out exactly on a 17×17 grid and interpolated in between
 /** Canvas pixels per CSS pixel: sharp on phone screens without 9× the work at 3×. */
 const DPR = typeof window === 'undefined' ? 1 : Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
@@ -386,7 +434,14 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
     if (s.bbox[0] > east || s.bbox[2] < west || s.bbox[1] > north || s.bbox[3] < south) continue;
     tried++;
     const g = utmGrid(s.epsg % 100);
-    const [rgb, cls] = await Promise.all([Raster.open(s.tci.href, s.tci.transform, s.tci.shape[1], lv), Raster.open(s.href, s.transform, s.shape[1], Math.max(0, lv - 1))]);
+    const { tci, bands } = s;
+    const [rgb, gBand, bBand, cls] = await Promise.all([
+      Raster.open(bands.r, tci.transform, tci.shape[1], lv),
+      Raster.open(bands.g, tci.transform, tci.shape[1], lv),
+      Raster.open(bands.b, tci.transform, tci.shape[1], lv),
+      Raster.open(s.href, s.transform, s.shape[1], Math.max(0, lv - 1)),
+    ]);
+    const lut = toneLut(bands.scale, bands.offset);
     const { tileW, tileH } = rgb.ifd;
     rTile.fill(-1);
     const need = new Set<number>();
@@ -423,7 +478,7 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
     }
     if (!need.size) continue;
     // Classification first (tiny); colour tiles only where that pass saw the ground.
-    const clsTiles = new Map<number, Uint8Array | null>();
+    const clsTiles = new Map<number, Px | null>();
     await Promise.all([...needCls].map(async (t) => clsTiles.set(t, await cls.load(t))));
     const clear = new Uint8Array(N);
     const wanted = new Set<number>();
@@ -435,16 +490,23 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
       // Cloudy pixels still get a colour tile when nothing has been drawn there yet (stand-in).
       if (clear[p] || (ct && k !== 0 && !fallback[p])) wanted.add(rTile[p]);
     }
-    const rgbTiles = new Map<number, Uint8Array | null>();
-    await Promise.all([...wanted].map(async (t) => rgbTiles.set(t, await rgb.load(t))));
+    // The three bands share one grid, so one tile index serves all of them.
+    const rgbTiles = new Map<number, [Px, Px, Px] | null>();
+    await Promise.all(
+      [...wanted].map(async (t) => {
+        const [r, g2, b] = await Promise.all([rgb.load(t), gBand.load(t), bBand.load(t)]);
+        rgbTiles.set(t, r && g2 && b ? [r, g2, b] : null);
+      }),
+    );
     let drew = false;
     for (let p = 0; p < N; p++) {
       if (rTile[p] < 0) continue;
-      const rt = rgbTiles.get(rTile[p]);
-      if (!rt) continue;
-      let r: number;
-      let gg: number;
-      let bb: number;
+      const tl = rgbTiles.get(rTile[p]);
+      if (!tl) continue;
+      const [tr, tg, tb] = tl;
+      let dr: number;
+      let dg: number;
+      let db: number;
       if (smooth) {
         // Bilinear within the tile (clamped at its edges; seams every 10 km are invisible).
         const fr = Math.min(tileH - 1, Math.max(0, rRow[p]));
@@ -455,29 +517,36 @@ async function drawTile(canvas: HTMLCanvasElement, c: L.Coords, until: number | 
         const c1 = Math.min(tileW - 1, c0 + 1);
         const wy = fr - r0;
         const wx = fc - c0;
-        const o00 = (r0 * tileW + c0) * 3;
-        const o01 = (r0 * tileW + c1) * 3;
-        const o10 = (r1 * tileW + c0) * 3;
-        const o11 = (r1 * tileW + c1) * 3;
-        // A no-data neighbour (0,0,0 at the swath edge) would darken the blend: use the nearest.
-        if (!(rt[o00] | rt[o00 + 1] | rt[o00 + 2]) || !(rt[o01] | rt[o01 + 1] | rt[o01 + 2]) || !(rt[o10] | rt[o10 + 1] | rt[o10 + 2]) || !(rt[o11] | rt[o11 + 1] | rt[o11 + 2])) {
-          const o = (Math.round(fr) * tileW + Math.round(fc)) * 3;
-          r = rt[o];
-          gg = rt[o + 1];
-          bb = rt[o + 2];
+        const o00 = r0 * tileW + c0;
+        const o01 = r0 * tileW + c1;
+        const o10 = r1 * tileW + c0;
+        const o11 = r1 * tileW + c1;
+        // A no-data neighbour (0 at the swath edge) would darken the blend: use the nearest.
+        if (!tr[o00] || !tr[o01] || !tr[o10] || !tr[o11]) {
+          const o = Math.round(fr) * tileW + Math.round(fc);
+          dr = tr[o];
+          dg = tg[o];
+          db = tb[o];
         } else {
-          const mix = (k: number) => (rt[o00 + k] * (1 - wx) + rt[o01 + k] * wx) * (1 - wy) + (rt[o10 + k] * (1 - wx) + rt[o11 + k] * wx) * wy;
-          r = mix(0);
-          gg = mix(1);
-          bb = mix(2);
+          const mix = (t: Px) => (t[o00] * (1 - wx) + t[o01] * wx) * (1 - wy) + (t[o10] * (1 - wx) + t[o11] * wx) * wy;
+          dr = mix(tr);
+          dg = mix(tg);
+          db = mix(tb);
         }
       } else {
-        const o = (rRow[p] * tileW + rCol[p]) * 3;
-        r = rt[o];
-        gg = rt[o + 1];
-        bb = rt[o + 2];
+        const o = rRow[p] * tileW + rCol[p];
+        dr = tr[o];
+        dg = tg[o];
+        db = tb[o];
       }
-      if (!r && !gg && !bb) continue; // outside the swath
+      if (!dr || !dg || !db) continue; // outside the swath
+      const vr = lut[Math.min(20000, dr | 0)];
+      const vg = lut[Math.min(20000, dg | 0)];
+      const vb = lut[Math.min(20000, db | 0)];
+      const avg = ((vr + vg + vb) / 3) * (1 - SAT);
+      const r = srgb(avg + vr * SAT);
+      const gg = srgb(avg + vg * SAT);
+      const bb = srgb(avg + vb * SAT);
       if (clear[p] || !fallback[p]) {
         out[p * 4] = r;
         out[p * 4 + 1] = gg;

@@ -19,6 +19,8 @@ export interface Scene {
   href: string;
   /** True colour, 10 m (the SCL grid is 20 m). */
   tci?: { href: string; transform: number[]; shape: [number, number] };
+  /** Raw 10 m red/green/blue (uint16; reflectance = value × scale + offset), same grid as tci. */
+  bands?: { r: string; g: string; b: string; scale: number; offset: number };
   /** lon/lat footprint box. */
   bbox?: number[];
 }
@@ -33,7 +35,7 @@ export async function s2(url: URL): Promise<Response> {
   if (!area && (!Number.isFinite(lat) || !Number.isFinite(lon))) return new Response('lat/lon or cell required', { status: 400 });
   const cell = area ? `sq/${area[0]},${area[1]}` : `${(Math.round(lat * 20) / 20).toFixed(2)},${(Math.round(lon * 20) / 20).toFixed(2)}`;
   const slot = Math.floor(Date.now() / (3 * 3600e3));
-  const key = new Request(`https://s2-cache.internal/v2/${cell}/${slot}`);
+  const key = new Request(`https://s2-cache.internal/v4/${cell}/${slot}`);
   const hit = await cache().match(key);
   if (hit) return hit;
   const now = new Date();
@@ -56,7 +58,11 @@ export async function s2(url: URL): Promise<Response> {
   });
   if (!r.ok) return new Response(JSON.stringify({ error: `stac ${r.status}` }), { status: 502, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   const j = (await r.json()) as {
-    features: { bbox?: number[]; properties: Record<string, unknown>; assets: Record<string, { href: string; 'proj:transform'?: number[]; 'proj:shape'?: [number, number] }> }[];
+    features: {
+      bbox?: number[];
+      properties: Record<string, unknown>;
+      assets: Record<string, { href: string; 'proj:transform'?: number[]; 'proj:shape'?: [number, number]; 'raster:bands'?: { scale?: number; offset?: number }[] }>;
+    }[];
   };
   const scenes: Scene[] = j.features.flatMap((f) => {
     const a = f.assets.scl;
@@ -64,7 +70,12 @@ export async function s2(url: URL): Promise<Response> {
     const epsg = Number(f.properties['proj:epsg']);
     if (!a?.href || !a['proj:transform'] || !a['proj:shape'] || !epsg) return [];
     const tci = v?.href && v['proj:transform'] && v['proj:shape'] ? { href: v.href, transform: v['proj:transform'], shape: v['proj:shape'] } : undefined;
-    return [{ at: Date.parse(String(f.properties.datetime)) / 1000, cloud: Number(f.properties['eo:cloud_cover']), epsg, transform: a['proj:transform'], shape: a['proj:shape'], href: a.href, tci, bbox: f.bbox }];
+    const { red, green, blue } = f.assets;
+    const rb = red?.['raster:bands']?.[0];
+    // Earth Search already removed the -0.1 offset from newer scenes (despite listing it): applying it
+    // again turns bare ground black.
+    const bands = red?.href && green?.href && blue?.href ? { r: red.href, g: green.href, b: blue.href, scale: rb?.scale ?? 0.0001, offset: f.properties['earthsearch:boa_offset_applied'] ? 0 : (rb?.offset ?? 0) } : undefined;
+    return [{ at: Date.parse(String(f.properties.datetime)) / 1000, cloud: Number(f.properties['eo:cloud_cover']), epsg, transform: a['proj:transform'], shape: a['proj:shape'], href: a.href, tci, bands, bbox: f.bbox }];
   });
   const res = new Response(JSON.stringify(scenes), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' } });
   await cache().put(key, res.clone());

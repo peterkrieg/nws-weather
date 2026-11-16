@@ -13,6 +13,7 @@ export interface Scene {
   href: string;
   /** True colour, 10 m (only from the area lookup the satellite map uses). */
   tci?: { href: string; transform: number[]; shape: [number, number] };
+  bands?: { r: string; g: string; b: string; scale: number; offset: number };
   bbox?: number[];
 }
 export interface Seen {
