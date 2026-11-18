@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { usePersisted, type ChartId, type Item } from './store';
 import { SegmentedControl } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
@@ -104,14 +104,19 @@ interface PanelProps {
   rows: (h: Hour) => TipRow[];
   head?: (h: Hour) => string | undefined;
   children: ReactNode;
+  /** Extra line in the header (e.g. a dragged range's total). */
+  note?: ReactNode;
+  /** Mouse handlers for the chart (recharts passes the hovered x as activeLabel). */
+  mouse?: Record<'onMouseDown' | 'onMouseMove' | 'onMouseUp', (s: any) => void>;
 }
 
 /** One chart card. All panels share a syncId, so hovering any of them moves the crosshair in all. */
-function Panel({ title, legend, frame, data, domain, yTicks, yFormat, rows, head, children }: PanelProps) {
+function Panel({ title, legend, frame, data, domain, yTicks, yFormat, rows, head, children, note, mouse }: PanelProps) {
   return (
     <div className="card panel">
       <div className="panel-head">
         <h3>{title}</h3>
+        {note}
         {legend && (
           <div className="legend">
             {legend.map((l) => (
@@ -123,9 +128,9 @@ function Panel({ title, legend, frame, data, domain, yTicks, yFormat, rows, head
           </div>
         )}
       </div>
-      <div className="plot">
+      <div className={mouse ? 'plot plot-drag' : 'plot'}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data ?? frame.data} syncId="hourly" margin={{ top: 6, right: 10, bottom: 0, left: 0 }}>
+          <ComposedChart data={data ?? frame.data} syncId="hourly" margin={{ top: 6, right: 10, bottom: 0, left: 0 }} {...mouse}>
             <CartesianGrid vertical={false} stroke="var(--grid)" />
             {frame.nights.map(([a, b]) => (
               <ReferenceArea key={a} x1={a} x2={b} fill="var(--night)" fillOpacity={1} stroke="none" />
@@ -229,8 +234,77 @@ function Bar({ x, y, width, height, fill }: any) {
   );
 }
 
+/** Hours from lo to hi (exclusive) and the amount forecast in them, spreading each multi-hour total evenly. */
+function rangeTotal(frame: Frame, kind: 'qpf' | 'snow', lo: number, hi: number) {
+  const startKey = kind === 'qpf' ? 'qpfStart' : 'snowStart';
+  const hrsKey = kind === 'qpf' ? 'qpfHrs' : 'snowHrs';
+  let total = 0;
+  let partial = false;
+  for (const h of frame.data) {
+    if (h.t < lo || h.t >= hi) continue;
+    const v = h[kind];
+    if (!v) continue;
+    const hrs = h[hrsKey] ?? 1;
+    total += v / hrs;
+    const s = h[startKey] ?? h.t;
+    // A bucket that runs past either end of the range is only partly counted: the split is an estimate.
+    if (s < lo || s + hrs * HOUR > hi) partial = true;
+  }
+  return { total, partial };
+}
+
+function rangeLabel(frame: Frame, lo: number, hi: number) {
+  const a = frame.byT.get(lo);
+  const lastHr = frame.byT.get(hi - HOUR);
+  if (!a || !lastHr) return '';
+  const endHr = (lastHr.hr + 1) % 24;
+  const endDow = endHr === 0 ? (frame.byT.get(hi)?.dow ?? '') : lastHr.dow;
+  const end = endDow === a.dow ? hourShort(endHr) : `${endDow} ${hourShort(endHr)}`;
+  return `${a.dow} ${hourShort(a.hr)} – ${end}`;
+}
+
+/** Desktop: drag across an amount chart to total the rain or snow over that stretch of time. */
+function useRangeSelect(enabled: boolean) {
+  const [sel, setSel] = useState<{ a: number; b: number; done: boolean } | null>(null);
+  const tAt = (s: any) => {
+    const t = Number(s?.activeLabel);
+    return Number.isFinite(t) ? t : null;
+  };
+  useEffect(() => {
+    if (!sel || sel.done) return;
+    // Releasing the button outside the chart still ends the drag.
+    const up = () => setSel((p) => (p && !p.done ? (p.a === p.b ? null : { ...p, done: true }) : p));
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, [sel]);
+  useEffect(() => {
+    if (!sel?.done) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setSel(null);
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [sel?.done]);
+  const mouse = enabled
+    ? {
+        onMouseDown: (s: any) => {
+          const t = tAt(s);
+          setSel(t == null ? null : { a: t, b: t, done: false });
+        },
+        onMouseMove: (s: any) => {
+          const t = tAt(s);
+          if (t != null) setSel((p) => (p && !p.done && p.b !== t ? { ...p, b: t } : p));
+        },
+        // A click without a drag clears the range.
+        onMouseUp: () => setSel((p) => (p && !p.done ? (p.a === p.b ? null : { ...p, done: true }) : p)),
+      }
+    : undefined;
+  const range = sel && sel.a !== sel.b ? ([Math.min(sel.a, sel.b), Math.max(sel.a, sel.b) + HOUR] as const) : null;
+  return { range, mouse, clear: () => setSel(null) };
+}
+
 function AmountPanel({ frame, kind, title }: { frame: Frame; kind: 'qpf' | 'snow'; title: string }) {
   const bars = useMemo(() => buckets(frame.data, kind), [frame.data, kind]);
+  const desktop = useMediaQuery('(hover: hover) and (pointer: fine)') ?? false;
+  const { range, mouse, clear } = useRangeSelect(desktop);
   if (!bars.length) return null;
   const rain = kind === 'qpf';
   const total = bars.reduce((a, b) => a + b.v, 0);
@@ -251,9 +325,28 @@ function AmountPanel({ frame, kind, title }: { frame: Frame; kind: 'qpf' | 'snow
   const max = Math.max(...bars.map((b) => b.v));
   const top = [0.1, 0.2, 0.5, 1, 2, 4, 6, 10, 20, 40].find((t) => t >= max) ?? Math.ceil(max / 10) * 10;
   const hrsKey = rain ? 'qpfHrs' : 'snowHrs';
+  let note: ReactNode = null;
+  if (range) {
+    const { total, partial } = rangeTotal(frame, kind, range[0], range[1]);
+    note = (
+      <span className="panel-sel">
+        {rangeLabel(frame, range[0], range[1])} · {Math.round((range[1] - range[0]) / HOUR)} hr ·{' '}
+        <b>
+          {partial ? '≈' : ''}
+          {inches(total, rain ? 2 : 1)}
+        </b>{' '}
+        {rain ? 'precip' : 'snow'}
+        <button type="button" onClick={clear} aria-label="Clear range">
+          ×
+        </button>
+      </span>
+    );
+  } else if (desktop) note = <span className="panel-hint">Drag across to total a period</span>;
   return (
     <Panel
       title={title}
+      note={note}
+      mouse={mouse}
       frame={frame}
       domain={[0, top]}
       yTicks={[0, top / 2, top]}
@@ -270,6 +363,9 @@ function AmountPanel({ frame, kind, title }: { frame: Frame; kind: 'qpf' | 'snow
       {bars.map((b) => (
         <ReferenceArea key={b.x1} x1={b.x1} x2={b.x2} y1={0} y2={b.v} fill={color} shape={<Bar />} />
       ))}
+      {range && (
+        <ReferenceArea x1={range[0]} x2={Math.min(range[1], frame.data[frame.data.length - 1].t)} fill="var(--ink)" fillOpacity={0.08} stroke="var(--ink-2)" strokeOpacity={0.5} strokeDasharray="3 3" />
+      )}
       <Line dataKey={kind} stroke="none" dot={false} activeDot={false} isAnimationActive={false} legendType="none" />
     </Panel>
   );
