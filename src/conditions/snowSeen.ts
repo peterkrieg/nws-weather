@@ -184,8 +184,42 @@ export class SceneReader {
 export class SnowSeen {
   private readers = new Map<string, SceneReader>();
   private scenes: Scene[] = [];
-  private loadedFor = '';
+  /** Scene lists per 0.05° cell (how /api/s2 caches them), so a short pan reuses one. */
+  private lists = new Map<string, Promise<Scene[]>>();
   private seen = new Map<string, Seen | null>();
+
+  private cell(lat: number, lon: number) {
+    return [Math.round(lat * 20) / 20, Math.round(lon * 20) / 20] as const;
+  }
+
+  private list(lat: number, lon: number) {
+    const [a, b] = this.cell(lat, lon);
+    const key = `${a.toFixed(2)},${b.toFixed(2)}`;
+    let l = this.lists.get(key);
+    if (!l) {
+      l = fetch(`/api/s2?lat=${a.toFixed(3)}&lon=${b.toFixed(3)}`)
+        .then((r) => (r.ok ? (r.json() as Promise<Scene[]>) : Promise.reject(new Error(`s2 ${r.status}`))))
+        .then((scenes) => {
+          // Their headers too, so the first look in this area skips that round trip.
+          for (const s of scenes) this.readerFor(s).warm();
+          return scenes;
+        });
+      l.catch(() => this.lists.get(key) === l && this.lists.delete(key));
+      this.lists.set(key, l);
+    }
+    return l;
+  }
+
+  /** Fetch the scene lists (and headers) for the cells a box touches, ahead of a pan there. */
+  warmList(lat: number, lon: number, box: { west: number; south: number; east: number; north: number }) {
+    for (const la of [box.south, lat, box.north]) for (const lo of [box.west, lon, box.east]) this.list(la, lo).catch(() => {});
+  }
+
+  private readerFor(s: Scene) {
+    const r = this.readers.get(s.href) ?? new SceneReader(s);
+    this.readers.set(s.href, r);
+    return r;
+  }
   private inflight: Promise<void> = Promise.resolve();
 
   /**
@@ -200,29 +234,15 @@ export class SnowSeen {
   }
 
   private async loadNow(lat: number, lon: number, points: { lat: number; lon: number }[]) {
-    const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
-    if (key !== this.loadedFor) {
-      const r = await fetch(`/api/s2?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`);
-      this.scenes = r.ok ? ((await r.json()) as Scene[]) : [];
-      this.loadedFor = key;
-    }
+    this.scenes = await this.list(lat, lon).catch(() => [] as Scene[]);
     const todo = points.filter((p) => !this.seen.has(this.key(p.lat, p.lon)));
     for (const p of todo) this.seen.set(this.key(p.lat, p.lon), null);
     // Newest scene first; each point stops at the first clear look. Headers for every scene are
     // asked for at once (one round trip, not one per scene).
     let left = todo;
     let failed = false;
-    if (todo.length)
-      for (const s of this.scenes) {
-        const reader = this.readers.get(s.href) ?? new SceneReader(s);
-        this.readers.set(s.href, reader);
-        void reader.warm();
-      }
-    const readerFor = (s: Scene) => {
-      const r = this.readers.get(s.href) ?? new SceneReader(s);
-      this.readers.set(s.href, r);
-      return r;
-    };
+    if (todo.length) for (const s of this.scenes) this.readerFor(s).warm();
+    const readerFor = (s: Scene) => this.readerFor(s);
     // The tiles a scene needs for these points (a few small 512 px tiles), all at once.
     const pull = (reader: SceneReader, pts: typeof left) =>
       Promise.all(

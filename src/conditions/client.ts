@@ -3,7 +3,7 @@
 
 import type { GeoJSONSource, LayerSpecification, Map as MlMap } from 'maplibre-gl';
 import type { Weather } from './model';
-import type { PrefetchRequest, ProbeInputs, ProbeReply, ProbeRequest, RunReply, RunRequest, Stretch, TrailIn } from './worker';
+import type { AroundRequest, PrefetchRequest, ProbeInputs, ProbeReply, ProbeRequest, RunReply, RunRequest, Stretch, TrailIn } from './worker';
 import type { Result } from './model';
 import { applyStations, type Ground } from './stations';
 
@@ -116,6 +116,11 @@ function lengthKm(trails: TrailIn[]) {
   return m / 1000;
 }
 
+function styleReady(map: MlMap) {
+  const style = (map as unknown as { style?: { _loaded?: boolean } }).style;
+  return style?._loaded ?? map.isStyleLoaded();
+}
+
 export class TrailConditions {
   private worker: Worker | null = null;
   private enabled = false;
@@ -223,7 +228,14 @@ export class TrailConditions {
 
   private async run() {
     const map = this.map;
-    if (!this.enabled || !map.isStyleLoaded()) return;
+    if (!this.enabled) return;
+    // The style's layers and sources must exist; tiles still loading are fine (each finished trail
+    // tile re-runs this). isStyleLoaded() is false while *any* tile loads — hillshade, or this
+    // layer's own data — which used to skip runs after a pan until a later tile event.
+    if (!styleReady(map)) {
+      map.once('styledata', this.schedule);
+      return;
+    }
     if (map.getZoom() < MIN_ZOOM) {
       this.clear();
       this.onStatus({ state: 'zoom' });
@@ -288,10 +300,25 @@ export class TrailConditions {
         return;
       }
       this.show(reply, target);
+      this.preloadAround(box);
     } catch (err) {
       if (id !== this.runId) return;
       this.onStatus({ state: 'error', message: String(err) });
     }
+  }
+
+  /**
+   * Once a view is done: download what the area around it needs (one map's width further each way),
+   * so panning there only has to run the model. Weather is per 0.1° cell; terrain, soil and cover
+   * load in the worker.
+   */
+  private preloadAround(box: Box) {
+    const w = box.east - box.west;
+    const h = box.north - box.south;
+    const big = { west: box.west - w, east: box.east + w, south: box.south - h, north: box.north + h };
+    for (const lat of [big.south, (big.south + big.north) / 2, big.north])
+      for (const lon of [big.west, (big.west + big.east) / 2, big.east]) void this.weather(lat, lon).catch(() => {});
+    this.ensureWorker().postMessage({ kind: 'around', box: big } satisfies AroundRequest);
   }
 
   private show(reply: Extract<RunReply, { ok: true }>, target: number) {

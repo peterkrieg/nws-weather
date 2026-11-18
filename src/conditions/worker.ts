@@ -42,6 +42,15 @@ export interface Stretch {
   lengthM: number;
 }
 
+/**
+ * Preload terrain, soil and cover for the area around the view (sent once a view is done), so a pan
+ * into it only has to run the model.
+ */
+export interface AroundRequest {
+  kind: 'around';
+  box: RunRequest['box'];
+}
+
 /** Model inputs and result at one trail point and time: saved with each condition report. */
 export interface ProbeRequest {
   kind: 'probe';
@@ -127,8 +136,11 @@ interface Loads {
   /** Trail sample points the satellite look was asked for (grows as trail tiles arrive). */
   points: number;
   core: Promise<unknown>;
+  /** Fine (3.6 m) elevation: waited for only briefly, as USGS can take 10 s+ for a never-viewed area. */
+  fine: Promise<unknown>;
   s2: Promise<unknown>;
 }
+const FINE_WAIT_MS = 2500;
 let loads: Loads | null = null;
 const boxKey = (b: RunRequest['box']) => [b.west, b.south, b.east, b.north].map((v) => v.toFixed(5)).join(',');
 
@@ -154,8 +166,8 @@ function startLoads(box: RunRequest['box'], trails: TrailIn[]): Loads {
     t0,
     parts,
     points: points.length,
+    fine: timed('dem', dem.load(box, FINE_Z, 400)),
     core: Promise.all([
-      timed('dem', dem.load(box, FINE_Z, 400)),
       timed('dem2', dem.load(box, COARSE_Z, 4200)),
       timed('soil', soil.load(box)),
       timed('canopy', canopy.load(box)),
@@ -167,11 +179,21 @@ function startLoads(box: RunRequest['box'], trails: TrailIn[]): Loads {
   return loads;
 }
 
+/** Fine elevation loaded under a point and 10 m around it (what slope and hollow read). */
+function fineAround(lat: number, lon: number) {
+  const d = 10 / 111000;
+  const dl = d / Math.cos((lat * Math.PI) / 180);
+  return dem.hasTile(lat, lon) && dem.hasTile(lat + d, lon) && dem.hasTile(lat - d, lon) && dem.hasTile(lat, lon + dl) && dem.hasTile(lat, lon - dl);
+}
+
 async function run(req: RunRequest): Promise<RunReply> {
   const t0 = performance.now();
   const sampled = req.trails.map((t) => sampleLine(t.coords));
   const l = startLoads(req.box, req.trails);
   await l.core;
+  // Points whose fine elevation hasn't arrived are left out (reported as missing, so the client
+  // runs again shortly) rather than holding up every other trail in view.
+  await Promise.race([l.fine, new Promise((ok) => setTimeout(ok, FINE_WAIT_MS))]);
   // First pass: don't wait on a slow satellite read (the client asks again once it's in).
   let s2Done = true;
   if (req.waitSatellite) await l.s2;
@@ -202,11 +224,16 @@ async function run(req: RunRequest): Promise<RunReply> {
       seen.add(near);
       let terrain = terrainCache.get(key);
       if (terrain === undefined) {
+        // Without the fine tiles here (still downloading, or failed) the slope and hollow would come
+        // from 30 m data and be remembered: skip the point this time and assess it on the retry.
+        if (!fineAround(p.lat, p.lon)) {
+          missing++;
+          flush();
+          prev = null;
+          continue;
+        }
         terrain = pointTerrain(dem, p.lat, p.lon, p.dir);
-        // Only remember "no terrain" when the elevation tile actually loaded; a tile that failed
-        // to download should be tried again on the next run.
-        if (terrain || dem.hasTile(p.lat, p.lon)) terrainCache.set(key, terrain);
-        else missing++;
+        terrainCache.set(key, terrain);
       }
       if (!terrain) {
         flush();
@@ -249,7 +276,19 @@ async function probe(req: ProbeRequest): Promise<ProbeReply> {
   return { id: req.id, ok: true, result, inputs: { ...site, terrain: { ...terrain, horizon: [...terrain.horizon] } } };
 }
 
-self.onmessage = (e: MessageEvent<RunRequest | ProbeRequest | PrefetchRequest>) => {
+function around(box: RunRequest['box']) {
+  // One after another, finest last: the coarse skyline tiles mostly overlap what's loaded already.
+  void Promise.all([soil.load(box), canopy.load(box), landCover.load(box).catch(() => {}), dem.load(box, COARSE_Z, 4200)])
+    .then(() => dem.load(box, FINE_Z, 400))
+    .catch(() => {});
+  snowSeen.warmList((box.north + box.south) / 2, (box.east + box.west) / 2, box);
+}
+
+self.onmessage = (e: MessageEvent<RunRequest | ProbeRequest | PrefetchRequest | AroundRequest>) => {
+  if ('kind' in e.data && e.data.kind === 'around') {
+    around(e.data.box);
+    return;
+  }
   if ('kind' in e.data && e.data.kind === 'prefetch') {
     startLoads(e.data.box, e.data.trails);
     return;

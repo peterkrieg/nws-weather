@@ -10,6 +10,8 @@ import { readDem, type Raster } from './tiff';
 export const FINE_Z = 15;
 export const COARSE_Z = 12;
 const PX = 256;
+/** Decoded tiles kept (256 KB each): the oldest-used go first past this. */
+const MAX_TILES = 400;
 
 /** Horizon directions: every 15°, clockwise from north. */
 export const AZ_STEPS = 24;
@@ -65,6 +67,12 @@ export class Dem {
           // Still downloading for an earlier call: wait for it rather than skip it.
           const inFlight = this.pending.get(k);
           if (inFlight) jobs.push(inFlight);
+          else {
+            // Mark as recently used (Map order is the eviction order).
+            const t = this.tiles.get(k)!;
+            this.tiles.delete(k);
+            this.tiles.set(k, t);
+          }
           continue;
         }
         this.tiles.set(k, null);
@@ -83,6 +91,10 @@ export class Dem {
       }
     }
     await Promise.all(jobs);
+    for (const k of this.tiles.keys()) {
+      if (this.tiles.size <= MAX_TILES) break;
+      if (!this.pending.has(k)) this.tiles.delete(k);
+    }
   }
 
   /** Whether the tile under this point has loaded (so a NaN there means genuinely no data). */
