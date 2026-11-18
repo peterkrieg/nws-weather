@@ -95,7 +95,97 @@ function unpredictFloat(bytes: Uint8Array, w: number, h: number): Uint8Array<Arr
 const NODATA_DM = -2147483648;
 const NODATA = -3.4028234663852886e38;
 
+// Version 2 (what /api/dem2 sends now, ~⅓ smaller): each value is predicted from its left, upper
+// and upper-left neighbours (left + up − upper-left, a tilted plane, which terrain mostly is), and
+// only the error is stored, zigzagged to u16 and split into a low-byte block then a high-byte block
+// (gzip finds the mostly-zero high bytes easy). Layout, little-endian:
+//   "DM" 2 0 | width u16 | height u16 | exceptions u32 | no-data u32 | low bytes | high bytes |
+//   exceptions × (index u32, value i32) | no-data × index u32
+// An error too big for u16 is stored as 0xFFFF plus an exception holding the value itself. No-data
+// points are stored as their prediction and listed at the end.
+const ESC = 0xffff;
+const zig = (v: number) => (v << 1) ^ (v >> 31);
+const unzig = (z: number) => (z >>> 1) ^ -(z & 1);
+const predict = (q: Int32Array, i: number, x: number, y: number, w: number) =>
+  x && y ? q[i - 1] + q[i - w] - q[i - w - 1] : x ? q[i - 1] : y ? q[i - w] : 0;
+
 export function encodeDem(r: Raster): Uint8Array {
+  const { width: w, height: h, data } = r;
+  const n = w * h;
+  const q = new Int32Array(n);
+  const z = new Uint16Array(n);
+  const exc: number[] = [];
+  const nodata: number[] = [];
+  for (let y = 0, i = 0; y < h; y++)
+    for (let x = 0; x < w; x++, i++) {
+      const p = predict(q, i, x, y, w);
+      const v = data[i];
+      if (!(Number.isFinite(v) && v > -10000)) {
+        q[i] = p;
+        nodata.push(i);
+        continue;
+      }
+      q[i] = Math.round(v * 10);
+      const e = zig(q[i] - p) >>> 0;
+      if (e < ESC) z[i] = e;
+      else {
+        z[i] = ESC;
+        exc.push(i, q[i]);
+      }
+    }
+  const out = new DataView(new ArrayBuffer(16 + n * 2 + exc.length * 4 + nodata.length * 4));
+  out.setUint8(0, 0x44);
+  out.setUint8(1, 0x4d);
+  out.setUint8(2, 2);
+  out.setUint16(4, w, true);
+  out.setUint16(6, h, true);
+  out.setUint32(8, exc.length / 2, true);
+  out.setUint32(12, nodata.length, true);
+  const bytes = new Uint8Array(out.buffer);
+  for (let i = 0; i < n; i++) {
+    bytes[16 + i] = z[i] & 255;
+    bytes[16 + n + i] = z[i] >> 8;
+  }
+  let o = 16 + n * 2;
+  for (let k = 0; k < exc.length; k += 2) {
+    out.setUint32(o, exc[k], true);
+    out.setInt32(o + 4, exc[k + 1], true);
+    o += 8;
+  }
+  for (const i of nodata) {
+    out.setUint32(o, i, true);
+    o += 4;
+  }
+  return bytes;
+}
+
+function decodeDem2(buf: ArrayBuffer): Raster {
+  const dv = new DataView(buf);
+  const b = new Uint8Array(buf);
+  const w = dv.getUint16(4, true);
+  const h = dv.getUint16(6, true);
+  const nExc = dv.getUint32(8, true);
+  const nNo = dv.getUint32(12, true);
+  const n = w * h;
+  const q = new Int32Array(n);
+  let eo = 16 + n * 2;
+  for (let y = 0, i = 0; y < h; y++)
+    for (let x = 0; x < w; x++, i++) {
+      const z = b[16 + i] | (b[16 + n + i] << 8);
+      if (z === ESC) {
+        q[i] = dv.getInt32(eo + 4, true);
+        eo += 8;
+      } else q[i] = predict(q, i, x, y, w) + unzig(z);
+    }
+  const data = new Float32Array(n);
+  for (let i = 0; i < n; i++) data[i] = q[i] / 10;
+  let no = 16 + n * 2 + nExc * 8;
+  for (let k = 0; k < nNo; k++, no += 4) data[dv.getUint32(no, true)] = NODATA;
+  return { width: w, height: h, data };
+}
+
+/** Version 1 (row differences); kept so tiles already cached on a phone still read. */
+export function encodeDemV1(r: Raster): Uint8Array {
   const { width: w, height: h, data } = r;
   const out = new DataView(new ArrayBuffer(8 + h * (4 + (w - 1) * 6)));
   out.setUint8(0, 0x44);
@@ -128,6 +218,7 @@ export function encodeDem(r: Raster): Uint8Array {
 
 export function decodeDem(buf: ArrayBuffer): Raster {
   const dv = new DataView(buf);
+  if (dv.getUint8(2) === 2) return decodeDem2(buf);
   const w = dv.getUint16(4, true);
   const h = dv.getUint16(6, true);
   const data = new Float32Array(w * h);

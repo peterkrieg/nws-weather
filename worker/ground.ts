@@ -70,13 +70,20 @@ async function mountain(lat: number, lon: number, t0: number): Promise<Station[]
   if (!near.length) return [];
   // AWDB dates are station-local standard time; ask a little wide and place each value by hour.
   const fmt = (u: number) => new Date(u * 1000 - 7 * 3600e3).toISOString().slice(0, 16).replace('T', '%20');
-  const url = `${AWDB}/data?stationTriplets=${near.map((x) => x.m[0]).join(',')}&elements=TOBS,STO:-2,STO:-8,SMS:-2,SNWD&duration=HOURLY&beginDate=${fmt(t0 - 6 * 3600)}&endDate=${fmt(t0 + (HOURS + 6) * 3600)}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`awdb data ${r.status}`);
-  const data = (await r.json()) as {
+  type Rows = {
     stationTriplet: string;
     data: { stationElement: { elementCode: string; heightDepth?: number }; values: { date: string; value?: number }[] }[];
   }[];
+  // One request per station, in parallel: AWDB takes ~1 s for one station but 6–8 s for six in one call.
+  const data = (
+    await Promise.all(
+      near.map(async (x) => {
+        const url = `${AWDB}/data?stationTriplets=${x.m[0]}&elements=TOBS,STO:-2,STO:-8,SMS:-2,SNWD&duration=HOURLY&beginDate=${fmt(t0 - 6 * 3600)}&endDate=${fmt(t0 + (HOURS + 6) * 3600)}`;
+        const r = await fetch(url).catch(() => null);
+        return r?.ok ? ((await r.json()) as Rows) : [];
+      }),
+    )
+  ).flat();
   return data.flatMap((st) => {
     const hit = near.find((x) => x.m[0] === st.stationTriplet);
     if (!hit) return [];
@@ -137,20 +144,42 @@ async function valley(lat: number, lon: number, t0: number): Promise<Station[]> 
   return got.filter((x): x is NonNullable<typeof x> => x != null);
 }
 
-export async function ground(url: URL): Promise<Response> {
+const STALE_H = 3; // serve an answer up to this many hours old at once, refreshing it behind the scenes
+
+export async function ground(url: URL, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
   const lat = Number(url.searchParams.get('lat'));
   const lon = Number(url.searchParams.get('lon'));
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return new Response('lat/lon required', { status: 400 });
   // One answer per ~10 km square per hour: every viewer nearby shares it.
   const cell = `${(Math.round(lat * 10) / 10).toFixed(1)},${(Math.round(lon * 10) / 10).toFixed(1)}`;
   const hour = Math.floor(Date.now() / 3600e3);
+  const latestReq = new Request(`https://ground-cache.internal/v1/ground-latest/${cell}`);
+  const build = async () => {
+    const t0 = (hour - HOURS + 1) * 3600;
+    const [m, v] = await Promise.all([mountain(lat, lon, t0).catch(() => []), valley(lat, lon, t0).catch(() => [])]);
+    const g: Ground = { t: Array.from({ length: HOURS }, (_, i) => t0 + i * 3600), stations: [...v, ...m] };
+    await cache().put(latestReq, new Response(JSON.stringify(g), { headers: { 'Cache-Control': `max-age=${STALE_H * 3600}` } }));
+    return g;
+  };
+  const respond = (body: Ground, age = 600) =>
+    new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${age}` } });
   try {
-    const body = await cachedJson<Ground>(`ground/${cell}/${hour}`, 3600, async () => {
-      const t0 = (hour - HOURS + 1) * 3600;
-      const [m, v] = await Promise.all([mountain(lat, lon, t0).catch(() => []), valley(lat, lon, t0).catch(() => [])]);
-      return { t: Array.from({ length: HOURS }, (_, i) => t0 + i * 3600), stations: [...v, ...m] };
-    });
-    return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' } });
+    const hourReq = new Request(`https://ground-cache.internal/v1/ground/${cell}/${hour}`);
+    const hit = await cache().match(hourReq);
+    if (hit) return respond(await hit.json());
+    const fresh = () =>
+      build().then(async (g) => {
+        await cache().put(hourReq, new Response(JSON.stringify(g), { headers: { 'Cache-Control': 'max-age=3600' } }));
+        return g;
+      });
+    // Last hour's answer (or one a few hours old) is good enough to start from: send it now and
+    // fetch this hour's in the background, so nobody waits on the slow station services.
+    const stale = ctx ? await cache().match(latestReq) : undefined;
+    if (stale) {
+      ctx!.waitUntil(fresh().catch(() => {}));
+      return respond(await stale.json(), 60);
+    }
+    return respond(await fresh());
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), { status: 502, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   }

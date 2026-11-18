@@ -186,6 +186,13 @@ export class TrailConditions {
     // own tiles for bandwidth; the run's prefetch starts them early enough.)
     const c = this.map.getCenter();
     void this.weather(c.lat, c.lng).catch(() => {});
+    // Load and start the worker's code now rather than once the trail lines are in.
+    this.ensureWorker();
+  }
+
+  private ensureWorker() {
+    this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    return this.worker;
   }
 
   /** Weather for the 0.1° cell, shared by concurrent callers and kept 20 minutes. */
@@ -239,9 +246,8 @@ export class TrailConditions {
     const id = ++this.runId;
     this.onStatus({ state: 'loading' });
     const c = b.getCenter();
-    this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     // Terrain, soil and satellite downloads start now, alongside the weather request.
-    this.worker.postMessage({ kind: 'prefetch', trails, box } satisfies PrefetchRequest);
+    this.ensureWorker().postMessage({ kind: 'prefetch', trails, box } satisfies PrefetchRequest);
     const ask = (req: RunRequest) =>
       new Promise<RunReply>((resolve) => {
         const w = this.worker!;
@@ -324,7 +330,7 @@ export class TrailConditions {
     const dir = Math.atan2((b[0] - a[0]) * Math.cos((b[1] * Math.PI) / 180), b[1] - a[1]);
     const [plon, plat] = s.coords[best];
     const wx = await this.weather(plat, plon);
-    this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    this.ensureWorker();
     const id = ++this.probeId;
     const req: ProbeRequest = { kind: 'probe', id, lat: plat, lon: plon, dir, surface: s.surface, wx, target };
     const reply = await new Promise<ProbeReply>((resolve) => {

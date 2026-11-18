@@ -253,7 +253,7 @@ async function airQuality(url: URL, env: Env) {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === '/api/aq') return airQuality(url, env);
     if (url.pathname === '/api/trailwx') return trailWx(url);
@@ -261,7 +261,7 @@ export default {
     if (url.pathname.startsWith('/api/dem2/')) return dem2(url);
     if (url.pathname.startsWith('/api/soil/') || url.pathname.startsWith('/api/canopy/') || url.pathname.startsWith('/api/nlcd/')) return landcover(url);
     if (url.pathname === '/api/reports') return reports(req, url, env);
-    if (url.pathname === '/api/ground') return ground(url);
+    if (url.pathname === '/api/ground') return ground(url, ctx);
     if (url.pathname === '/api/snow') return snow(url);
     if (url.pathname === '/api/s2') return s2(url);
     if (url.pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);

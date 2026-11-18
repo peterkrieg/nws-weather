@@ -25,13 +25,13 @@ export async function dem(url: URL): Promise<Response> {
 }
 
 // /api/dem2/{z}/{x}/{y} — the same tile in the compact format (src/conditions/tiff.ts encodeDem),
-// gzipped once and cached: ~60 KB instead of 256 KB. The app unzips it (readDem).
+// gzipped once and cached: ~40 KB instead of 256 KB. The app unzips it (readDem).
 export async function dem2(url: URL): Promise<Response> {
   const m = url.pathname.match(/^\/api\/dem2\/(\d+)\/(\d+)\/(\d+)$/);
   if (!m) return new Response('bad tile', { status: 400 });
   const [z, x, y] = m.slice(1).map(Number);
   if (z !== FINE_Z && z !== COARSE_Z) return new Response('unsupported zoom', { status: 400 });
-  const key = new Request(`https://dem-cache.internal/v3/${z}/${x}/${y}`);
+  const key = new Request(`https://dem-cache.internal/v4/${z}/${x}/${y}`);
   const cache = (caches as unknown as { default: Cache }).default;
   const hit = await cache.match(key);
   if (hit) return hit;

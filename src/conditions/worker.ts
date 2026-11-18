@@ -124,6 +124,8 @@ interface Loads {
   key: string;
   t0: number;
   parts: Record<string, number>;
+  /** Trail sample points the satellite look was asked for (grows as trail tiles arrive). */
+  points: number;
   core: Promise<unknown>;
   s2: Promise<unknown>;
 }
@@ -132,16 +134,26 @@ const boxKey = (b: RunRequest['box']) => [b.west, b.south, b.east, b.north].map(
 
 function startLoads(box: RunRequest['box'], trails: TrailIn[]): Loads {
   const key = boxKey(box);
-  if (loads?.key === key) return loads;
+  const points = trails.flatMap((t) => sampleLine(t.coords));
+  const centre = [(box.north + box.south) / 2, (box.east + box.west) / 2] as const;
+  if (loads?.key === key) {
+    // Same view, but more trail lines may have arrived since: look those up from the satellite too
+    // (points already looked up are skipped).
+    if (points.length !== loads.points) {
+      loads.points = points.length;
+      loads.s2 = Promise.all([loads.s2, snowSeen.load(centre[0], centre[1], points).catch(() => {})]);
+    }
+    return loads;
+  }
   const t0 = performance.now();
   // How long each data source took (ms), for the status line's data-parts attribute.
   const parts: Record<string, number> = {};
   const timed = <T,>(name: string, p: Promise<T>) => p.finally(() => (parts[name] = Math.round(performance.now() - t0)));
-  const points = trails.flatMap((t) => sampleLine(t.coords));
   loads = {
     key,
     t0,
     parts,
+    points: points.length,
     core: Promise.all([
       timed('dem', dem.load(box, FINE_Z, 400)),
       timed('dem2', dem.load(box, COARSE_Z, 4200)),
@@ -150,7 +162,7 @@ function startLoads(box: RunRequest['box'], trails: TrailIn[]): Loads {
       timed('nlcd', landCover.load(box).catch(() => {})),
     ]),
     // Satellite snow is a refinement: never let it hold up or break a run.
-    s2: timed('s2', snowSeen.load((box.north + box.south) / 2, (box.east + box.west) / 2, points).catch(() => {})),
+    s2: timed('s2', snowSeen.load(centre[0], centre[1], points).catch(() => {})),
   };
   return loads;
 }
